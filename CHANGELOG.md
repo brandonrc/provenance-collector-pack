@@ -7,7 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Merged: nebari-security-posture-pack (Security Posture)
+
+This repository now also contains `nebari-security-posture-pack`, merged with
+`git merge --allow-unrelated-histories` so both histories are kept
+([proposal 0001](docs/proposals/0001-merge-with-provenance-collector-pack.md)).
+The pack is now the **Security Posture** pack: provenance becomes one of four
+evidence layers next to three-scanner vulnerability consensus (Trivy, Grype,
+Clair), Kubernetes STIG posture checks and live NIST SP 800-53 control
+assertions, with POA&M, STIG checklist, SAR and OSCAL reports.
+
+#### Added
+- `collector/`: the Go module (`cmd/`, `internal/`, `hack/`, `go.mod`,
+  `Makefile`, `Dockerfile`, `dev/`) moved here with `git mv`; the module path
+  `github.com/nebari-dev/provenance-collector` is unchanged.
+- Collector single-run mode: `provenance-collector --once [--output <path|->]`
+  writes the report JSON to a file or stdout (logs then go to stderr) instead
+  of the `PROVENANCE_REPORT_OUTPUT` sink. Default behaviour is unchanged.
+- The collector is the provenance engine of the pack: the worker image
+  bundles the binary and ingests its report once per scan
+  (`provenance.engine: collector`, Python checks as per-image and whole-run
+  fallback). Collector binaries for linux/darwin x amd64/arm64 are attached
+  to releases.
+- `api/` (FastAPI api + worker), `ui/` (React 19 + `nebari-design` admin UI),
+  compliance reports, controls engine; docs pages for compliance architecture,
+  controls, reports, provenance, scoring, design and decisions; a migration
+  guide.
+- Chart values compatibility layer (`chart/templates/_compat.tpl`): `config.*`
+  keys are aliases of `provenance.*` / `scanner.excludedNamespaces` /
+  `clusterName`.
+
+#### Changed
+- **Breaking:** the chart (name kept: `provenance-collector`, version 0.2.0)
+  deploys api, worker, ui, Postgres, Trivy and Clair instead of the CronJob,
+  the Go dashboard and the frontend. `schedule`, `persistence.mode`,
+  `frontend.keycloak.url` and a non-empty `config.namespaces` fail the render
+  with a pointer to `scanner.intervalHours` / Postgres / gateway auth /
+  `scanner.excludedNamespaces`.
+- **Breaking:** auth is gateway login + API JWT verification gated to
+  `adminGroups`, including `/api/reports*` on the public listener. Grafana
+  reads the unauthenticated `<release>-web-internal:8080/api/reports/latest`
+  (`provenance.compat.internalService.enabled`); the Grafana example uses it.
+- `config.helmEnabled` / `provenance.helmReleases.enabled` defaults to false
+  (cluster-wide Secrets RBAC is opt-in).
+- Images: `quay.io/nebari/provenance-collector-pack-{api,worker,ui}`; the
+  standalone `quay.io/nebari/provenance-collector` image is still built.
+- Workflows: lint/test cover `collector/` (Go), `api/` (pytest + Postgres),
+  `ui/` (eslint, tsc, vitest) and the chart (kubeconform, values compat);
+  build-image builds four images; the integration test deploys the merged
+  chart and checks the collector ingest and `/api/reports/latest`.
+- `pack-metadata.yaml`: display name "Security Posture", level experimental.
+- Docs: the generated environment reference moved to
+  `collector-environment.md`; `configuration.md` documents the chart values.
+
+#### Removed
+- `frontend/` (the standalone React table SPA and its nginx image) and its
+  Playwright e2e specs (`test/e2e/`): replaced by `ui/`.
+- Chart templates for the CronJob, dashboard Deployment/Services/RBAC and
+  frontend.
+
+### Changed (provenance-collector-pack, before the merge)
 - Integration test migrated to `action-nebari-sandbox` v3, which provisions the
   sandbox through NIC's `local` (kind) provider instead of k3d + NIC's
   `existing` provider. The `profile` input is gone, the image is loaded with

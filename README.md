@@ -1,12 +1,69 @@
-# nebari-security-posture-pack
+<p align="center">
+  <a href="https://nebari.dev">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nebari-dev/nebari-design/main/logo-mark/horizontal/standard/Nebari-Logo-Horizontal-Lockup-White-text.png">
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nebari-dev/nebari-design/main/logo-mark/horizontal/standard/Nebari-Logo-Horizontal-Lockup.png">
+      <img alt="Nebari" src="https://raw.githubusercontent.com/nebari-dev/nebari-design/main/logo-mark/horizontal/standard/Nebari-Logo-Horizontal-Lockup.png" width="300">
+    </picture>
+  </a>
+</p>
 
-An **admin-only** [Nebari](https://nebari.dev) software pack that continuously
-inventories every container running in the cluster, scans each unique image
-with **Trivy, Grype and Clair**, cross-correlates the three result sets, audits
-workload configuration, and presents one **Security Posture rating** (0–100,
-grade A–F) with drill-down by image, CVE, workload, namespace and check.
+<h1 align="center">Security Posture</h1>
 
-Status: **experimental** (v0.1). Design contract: [docs/DESIGN.md](docs/DESIGN.md).
+<p align="center">
+  <strong>Provenance, vulnerabilities, workload posture and NIST SP 800-53 control evidence for every container running on your Nebari cluster.</strong><br />
+  The Go provenance collector records where every running image came from (digest, cosign signature, SBOM and SLSA
+  attestations, available updates, Helm releases); Trivy, Grype and Clair agree on what is wrong with it; sixteen
+  Kubernetes STIG-mapped checks audit how it runs; live assertions prove which 800-53 controls the platform implements.
+  One admin-only UI, one rating, and POA&amp;M / STIG checklist / SAR / OSCAL reports.
+</p>
+
+<p align="center">
+  <a href="https://github.com/brandonrc/provenance-collector-pack/actions/workflows/test.yaml"><img src="https://github.com/brandonrc/provenance-collector-pack/actions/workflows/test.yaml/badge.svg" alt="Test"></a>
+  <a href="https://github.com/brandonrc/provenance-collector-pack/actions/workflows/lint.yaml"><img src="https://github.com/brandonrc/provenance-collector-pack/actions/workflows/lint.yaml/badge.svg" alt="Lint"></a>
+  <a href="https://github.com/brandonrc/provenance-collector-pack/actions/workflows/build-image.yaml"><img src="https://github.com/brandonrc/provenance-collector-pack/actions/workflows/build-image.yaml/badge.svg" alt="Build Image"></a>
+  <a href="https://github.com/brandonrc/provenance-collector-pack/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
+  <a href="https://github.com/brandonrc/provenance-collector-pack/releases/latest"><img src="https://img.shields.io/github/v/release/brandonrc/provenance-collector-pack?logo=github&label=release&include_prereleases" alt="Latest Release"></a>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" alt="Go 1.25+"></a>
+  <a href="https://www.python.org"><img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12"></a>
+</p>
+
+<p align="center">
+  <a href="#how-it-works">How it works</a> &middot;
+  <a href="#install">Install</a> &middot;
+  <a href="#grafana-integration">Grafana</a> &middot;
+  <a href="#values">Values</a> &middot;
+  <a href="#migrating-from-provenance-collector-pack-01x">Migrating from 0.1.x</a> &middot;
+  <a href="#development">Development</a> &middot;
+  <a href="https://packs.nebari.dev/provenance-collector-pack/">Docs</a> &middot;
+  <a href="examples/">Examples</a>
+</p>
+
+<p align="center">
+  <img src="ui/screenshots/overview-light.png" alt="Security Posture overview: cluster rating, vulnerability, configuration and supply-chain scores" width="820">
+</p>
+
+> **Status**: experimental. This repository is the merge of `provenance-collector-pack` (Go collector, alpha, NIC
+> foundational) and `nebari-security-posture-pack` (proposal:
+> [docs/proposals/0001-merge-with-provenance-collector-pack.md](docs/proposals/0001-merge-with-provenance-collector-pack.md)).
+> The repository and Helm chart keep their names (`provenance-collector-pack`, chart `provenance-collector`); APIs,
+> chart values and the report schema may change while pre-1.0. Design contract: [docs/DESIGN.md](docs/DESIGN.md).
+
+## What it is
+
+An **admin-only** [Nebari](https://nebari.dev) software pack that continuously inventories every container running
+in the cluster and answers the compliance question for it at four levels:
+
+| Layer | Question | How |
+|---|---|---|
+| Provenance | Where did every running image come from? | The Go **provenance collector** (`collector/`): digest, cosign signature, SBOM and SLSA attestations, update check, Helm releases. Served unchanged as the provenance report API for Grafana. |
+| Image | What is wrong with it? | **Trivy, Grype and Clair** scan each unique digest (mirrored once into an in-cluster registry); findings are correlated into a per-CVE consensus. |
+| Workload | How is it run? | Sixteen posture checks (privileged, host namespaces, run-as-root, limits, probes, seccomp, mutable tags, NetworkPolicy, ...) mapped to the Kubernetes STIG. |
+| Platform | Which NIST SP 800-53 controls does the platform implement and prove? | 35 live assertions against Keycloak, the gateway, cert-manager, RBAC/PodSecurity, Loki, Prometheus and the registry; OSCAL SSP / component definition. |
+
+Everything rolls up into one **Security Posture rating** (0–100, grade A–F) with drill-down by image, CVE, workload,
+namespace, check and control, and into POA&M (eMASS layout), STIG checklist (CKL/CKLB), SAR (PDF), OSCAL assessment
+results, inventory and vulnerability exports.
 
 ## How it works
 
@@ -15,13 +72,15 @@ Status: **experimental** (v0.1). Design contract: [docs/DESIGN.md](docs/DESIGN.m
 ```
 inventory (K8s API) -> unique images by digest -> mirror (skopeo) -> trivy + grype + clair
    -> normalise -> correlate (consensus per CVE+package) -> score -> Postgres -> UI
+                   \-> provenance-collector --once (Go) -> ingest -> supply-chain score
+posture checks (per workload) + control assertions (per platform component) -> Postgres -> UI / reports
 ```
 
 | Component | Image | Role |
 |---|---|---|
-| `ui` | `nebari-security-posture-pack-ui` (nginx) | The only ingress target. Static SPA; proxies `/api/` to the api. |
-| `api` | `nebari-security-posture-pack-api` | FastAPI on :8000. Verifies the JWT and admin group itself. Runs migrations in an init container. |
-| `worker` | `nebari-security-posture-pack-worker` | One replica. Inventory, mirroring, scanning, scheduling. PVC at `/cache`. |
+| `ui` | `provenance-collector-pack-ui` (nginx) | The only ingress target. Static SPA built on `nebari-design`; proxies `/api/` to the api. |
+| `api` | `provenance-collector-pack-api` | FastAPI on :8000. Verifies the JWT and admin group itself. Runs migrations in an init container. Optional second listener (:8081) serving the unauthenticated provenance report API to Grafana. |
+| `worker` | `provenance-collector-pack-worker` | One replica. Inventory, mirroring, scanning, the provenance stage (runs the bundled Go `provenance-collector`), posture checks, control assertions, report generation, scheduling. PVC at `/cache`. |
 | `trivy` | `aquasec/trivy:0.75.0` | `trivy server` with its DB on a PVC. |
 | `clair` | `quay.io/projectquay/clair:4.9.0` | Combo mode on Postgres database `clair`. |
 | `postgres` | `postgres:16-alpine` | StatefulSet with databases `posture` and `clair` (or bring your own). |
@@ -40,6 +99,17 @@ bytes, upstream registries (Docker Hub rate limits) are pulled once per
 digest, and Clair has one reachable registry to work against. If the mirror
 step fails, the worker scans the original reference and records a warning.
 
+### Provenance (the Go collector)
+
+The worker image bundles the collector from [`collector/`](collector/) (the former
+provenance-collector CronJob binary, module `github.com/nebari-dev/provenance-collector`). Once per scan the
+provenance stage runs `provenance-collector --once --output <file>` with the worker's ServiceAccount and the chart's
+`provenance.*` settings, and ingests the report: records are matched to the inventory by digest and namespace,
+then by spec image, then by digest anywhere. Images the collector cannot resolve (for example node-local registry
+aliases such as `localhost:32000`) and images it does not cover fall back to the worker's Python checks in the same
+scan; if the binary fails, Python does everything. `provenance.engine: python` turns the collector off. Details:
+[docs/PROVENANCE.md](docs/PROVENANCE.md#engines).
+
 ### Scoring
 
 Findings from the three scanners are merged per `(CVE, package)`. Each finding
@@ -47,8 +117,8 @@ is weighted by its severity, by how many scanners agree on it, and by whether
 a fix exists. That gives a per-image score of `100 × exp(−penalty/40)`.
 Sixteen configuration checks (privileged, host namespaces, run-as-root,
 missing limits, mutable tags, seccomp, …) produce a posture score per workload.
-The cluster score is `0.7 × vulnerability + 0.3 × posture`, weighted by
-container count. Grades: A ≥ 90, B ≥ 80, C ≥ 65, D ≥ 50, F < 50. For the full
+The cluster score is `0.6 × vulnerability + 0.25 × posture + 0.15 × supply chain`
+(`0.7 / 0.3` when provenance is off), weighted by container count. Grades: A ≥ 90, B ≥ 80, C ≥ 65, D ≥ 50, F < 50. For the full
 rules, see [docs/SCORING.md](docs/SCORING.md).
 
 ## Admin-only gating
@@ -87,18 +157,20 @@ Keycloak. The namespace must carry `nebari.dev/managed=true`, or the operator
 silently ignores the NebariApp.
 
 ```bash
-kubectl create namespace security-posture
-kubectl label namespace security-posture nebari.dev/managed=true
+kubectl create namespace provenance-system
+kubectl label namespace provenance-system nebari.dev/managed=true
 
 helm dependency build chart
-helm upgrade --install security-posture ./chart -n security-posture \
-  --set nebariapp.enabled=true \
+helm upgrade --install provenance-collector ./chart -n provenance-system \
+  -f examples/nebari-values.yaml \
   --set nebariapp.hostname=security.example.com \
   --set 'auth.issuers={https://keycloak.example.com/auth/realms/nebari,http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari}'
 ```
 
-Without Nebari (`nebariapp.enabled=false`, the default), port-forward the
-`<fullname>-ui` Service. Use `auth.mode=disabled` for local development only.
+Or from the Nebari Helm repository once released: `helm install provenance-collector nebari/provenance-collector`.
+Without Nebari (`nebariapp.enabled=false`, the default), see
+[examples/standalone-values.yaml](examples/standalone-values.yaml) and port-forward the `<fullname>-ui` Service.
+Use `auth.mode=disabled` for local development only.
 
 ### ArgoCD
 
@@ -106,14 +178,14 @@ Without Nebari (`nebariapp.enabled=false`, the default), port-forward the
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: security-posture
+  name: provenance-collector
   namespace: argocd
 spec:
   project: nebari-apps
   source:
     repoURL: quay.io/nebari/charts
-    chart: nebari-security-posture-pack
-    targetRevision: 0.1.0
+    chart: provenance-collector
+    targetRevision: 0.2.0
     helm:
       valuesObject:
         nebariapp:
@@ -127,10 +199,10 @@ spec:
           # ArgoCD renders with `helm template`, where `lookup` returns nothing,
           # so a generated password would change on every sync. Pre-create a
           # Secret with keys `password` and `postgres-password` and name it here.
-          existingSecret: security-posture-db
+          existingSecret: provenance-collector-db
   destination:
     server: https://kubernetes.default.svc
-    namespace: security-posture
+    namespace: provenance-system
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     managedNamespaceMetadata:
@@ -140,6 +212,25 @@ spec:
       - CreateNamespace=true
 ```
 
+## Grafana integration
+
+The provenance report API of provenance-collector-pack is served unchanged (`/api/reports`,
+`/api/reports/latest`, `/api/reports/{filename}`, `/api/export`, `/api/me`, `/api/scan`, `/healthz`), generated
+from the latest completed scan. On the public listener it is admin-only like the rest of the API. For Grafana's
+Infinity datasource enable the unauthenticated, cluster-internal compat Service:
+
+```yaml
+provenance:
+  compat:
+    internalService:
+      enabled: true
+      allowedNamespaces: [monitoring]   # NetworkPolicy: Grafana's namespace
+```
+
+and point the datasource at `http://<release>-web-internal.<namespace>.svc:8080/api/reports/latest`
+([examples/grafana-dashboard.json](examples/grafana-dashboard.json) uses
+`provenance-collector-web-internal.provenance-system`).
+
 ## Values
 
 The table lists the main settings. For everything else, see the comments in
@@ -147,7 +238,7 @@ The table lists the main settings. For everything else, see the comments in
 
 | Key | Default | Description |
 |---|---|---|
-| `images.{api,worker,ui}.repository/tag` | `quay.io/nebari/nebari-security-posture-pack-*` / `0.1.0` | First-party images. A `digest` overrides the tag. |
+| `images.{api,worker,ui}.repository/tag` | `quay.io/nebari/provenance-collector-pack-*` / `0.2.0` | First-party images. A `digest` overrides the tag. |
 | `images.{trivy,clair,postgres}` | `0.75.0` / `4.9.0` / `16-alpine` | Pinned third-party images. |
 | `adminGroups` | `["admin"]` | Groups allowed in. Feeds all three gating layers. |
 | `adminGate.securityPolicy.enabled` | `false` | Render the chart's own Envoy SecurityPolicy (layer 2). |
@@ -160,6 +251,14 @@ The table lists the main settings. For everything else, see the comments in
 | `scanner.excludedNamespaces` | `[]` | Namespaces skipped by inventory. |
 | `scanner.{trivy,grype,clair}.enabled` | `true` | Enable each scanner. Trivy and Clair also deploy their servers. |
 | `scanner.mirror.enabled/registry/insecure/rewrite` | on, in-cluster registry | Mirror-then-scan. |
+| `provenance.enabled` / `engine` | `true` / `collector` | Supply-chain stage; `collector` runs the bundled Go collector, `python` the worker's own checks. |
+| `provenance.{verifySignatures,checkSBOM,checkProvenance,checkUpdates,updateLevel,skipPrerelease}` | on / `patch` | Their `config.*` keys (still accepted as aliases). |
+| `provenance.cosignPublicKey` / `cosign.*` | `""` | Key (PEM, path, KMS URI), key Secret, or keyless identity. |
+| `provenance.helmReleases.enabled` | `false` | Helm release discovery; adds cluster-wide Secrets get/list. |
+| `provenance.compat.internalService.*` | off | Unauthenticated report API for Grafana (see above). |
+| `controlsEngine.*` | on, `moderate` | NIST 800-53 assertions ([docs/CONTROLS.md](docs/CONTROLS.md)). |
+| `reports.autoGenerate` | `[]` | Report types generated after every scan ([docs/REPORTS.md](docs/REPORTS.md)). |
+| `clusterName` | `""` | Report metadata cluster name (theirs: `config.clusterName`). |
 | `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the worker for private registries. |
 | `postgresql.enabled` / `existingSecret` | `true` / `""` | Bundled Postgres. The Secret `<fullname>-db` is generated once and kept. |
 | `externalDatabase.*` | | `host`, `port`, `user`, `database`, `clairDatabase`, `sslmode`, `existingSecret`, `passwordKey`. |
@@ -181,13 +280,86 @@ registries, Keycloak JWKS and vulnerability feeds.
 
 RBAC: `get/list/watch` on pods, namespaces, nodes, serviceaccounts,
 ReplicaSets, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs,
-NetworkPolicies and `nebariapps.reconcilers.nebari.dev`. There is **no**
-access to Secrets.
+NetworkPolicies and `nebariapps.reconcilers.nebari.dev` (this also covers what the
+Go collector needs). Secrets only with `provenance.helmReleases.enabled` (cluster-wide
+get/list, Helm stores releases there) and `get` on the one Keycloak admin Secret for the
+controls engine.
+
+## Migrating from provenance-collector-pack ≤0.1.x
+
+The chart keeps its name (`provenance-collector`), so `helm upgrade` and ArgoCD
+Applications keep working, but what it deploys changes: the CronJob, the Go dashboard
+Deployment and the `frontend` nginx image are replaced by the api, worker, ui, Postgres,
+Trivy and Clair components. The full guide is
+[docs/src/content/docs/migrating.md](docs/src/content/docs/migrating.md).
+
+**Values** (`chart/templates/_compat.tpl`): old keys are aliases where an equivalent
+exists and fail the render with a pointer where the behaviour is gone.
+
+| ≤0.1.x | now | |
+|---|---|---|
+| `config.verifySignatures`, `checkSBOM`, `checkProvenance`, `checkUpdates`, `updateLevel`, `skipPrerelease`, `cosignPublicKey` | `provenance.<same key>` | alias (NOTES.txt warns) |
+| `config.helmEnabled` | `provenance.helmReleases.enabled` | alias; default is now **false** |
+| `config.registryTimeout` (`30s`) | `provenance.registryTimeoutSeconds` (`30`) | alias, Go duration converted |
+| `config.excludeNamespaces` | `scanner.excludedNamespaces` | alias (merged) |
+| `config.clusterName` | `clusterName` | alias |
+| `config.namespaces` (include list) | none: everything except `scanner.excludedNamespaces` | **fails** when non-empty |
+| `schedule` (cron) | `scanner.intervalHours` | **fails**: set the interval in hours |
+| `persistence.mode` (`http`/`pvc`/`configmap`) | Postgres (history per scan, last 10 scans) + PVCs | **fails**: remove it |
+| `frontend.keycloak.url` | gateway login + `adminGroups` | **fails**: remove `frontend.*` |
+| `config.report*`, `webUI.*`, `frontend.*`, `image`, `resources`, Job settings | none | ignored, listed in NOTES.txt |
+
+**Grafana**: the datasource URL changes from
+`http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest` to
+`http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest`
+with `provenance.compat.internalService.enabled=true` (or set
+`provenance.compat.internalService.name: provenance-collector-web` to keep the old host).
+The report schema and the `root_selector`s are unchanged.
+
+**Auth**: the SPA's in-browser PKCE login is gone. The gateway enforces login (NebariApp
+`auth.enforceAtGateway`), and the API verifies the token and requires membership of
+`adminGroups` for everything, including `/api/reports*` on the public listener (it was
+"any authenticated user"). Move `webUI.adminGroups` to `adminGroups` and
+`webUI.oidcIssuer` to `auth.issuers` / `auth.jwksUrl` by hand (they are not aliased).
+
+**Persistence**: there is no `persistence.mode`. Report history lives in Postgres
+(one provenance report per completed scan, last 10 scans); old report files on the
+previous PVC are not imported. `persistence.storageClass` still applies; the new PVCs are
+deleted with the release (`helm uninstall`), the generated database Secret is kept.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `collector/` | Go provenance collector (`cmd/provenance-collector`, single-run `--once --output`), the standalone dashboard binary, `internal/` packages, its Dockerfile and Makefile. |
+| `api/` | Python package `posture`: FastAPI api and worker, scanners, provenance ingest, controls engine, report generators. `Dockerfile.api`, `Dockerfile.worker` (bundles the collector). |
+| `ui/` | React 19 + Vite + `nebari-design` admin UI. |
+| `chart/` | Helm chart `provenance-collector` (all components, NebariApp, values compat layer). |
+| `docs/` | Design/operations markdown (`ARCHITECTURE`, `CONTROLS`, `REPORTS`, `PROVENANCE`, `SCORING`, `DESIGN`, `DECISIONS`, `proposals/`) and the Astro/Starlight site (`docs/src/content/docs`, deployed to packs.nebari.dev). |
+| `examples/` | Nebari, standalone and ArgoCD values; Grafana dashboard. |
+| `deploy/grace/` | Build/deploy scripts and values for the grace test cluster. |
+
+## Development
+
+```bash
+# Go collector (from collector/)
+make test                     # go test -race ./...
+make build && ./bin/provenance-collector --once --output - | jq .summary   # one report, current kubeconfig
+
+# api / worker: see api/README.md (pytest; TEST_DATABASE_URL enables the Postgres tests)
+# ui: see ui/README.md (Docker-only node workflow: lint, typecheck, vitest, build)
+
+# chart
+helm dependency build chart && helm lint chart && helm template t chart | kubeconform -strict -ignore-missing-schemas
+
+# docs site (from docs/): npm ci && npm run dev; regenerate pages from docs/*.md with python3 scripts/sync-docs.py
+```
+
 
 ## Grace quickstart
 
 ```bash
-TAG=$(deploy/grace/build-push.sh | tail -n1)   # builds and pushes localhost:32000/security-posture-{api,worker,ui}:$TAG
+TAG=$(deploy/grace/build-push.sh | tail -n1)   # builds and pushes localhost:32000/security-posture-{api,worker,ui}:$TAG (worker bundles collector/)
 TAG=$TAG deploy/grace/deploy.sh                # labels the namespace, then runs helm upgrade --install --wait
 ```
 
@@ -199,7 +371,7 @@ Then check the following:
 3. An unauthenticated browser is redirected to Keycloak.
 4. A non-admin user (for example alice) gets 403. An `admin` member sees the UI.
 
-## Limitations (v0.1)
+## Limitations
 
 * **No imagePullSecrets discovery.** The pack has no cluster-wide Secret
   access. Provide credentials for private registries with
@@ -216,4 +388,4 @@ Then check the following:
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+See [LICENSE](LICENSE).
