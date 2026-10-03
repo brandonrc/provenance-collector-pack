@@ -98,6 +98,32 @@
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
 
+- 2026-10-03 (merge into provenance-collector-pack, proposal 0001): Both repositories merged
+  with `git merge --allow-unrelated-histories` (history of both kept); the Go module moved to
+  `collector/` with `git mv` (module path `github.com/nebari-dev/provenance-collector`
+  unchanged). The thin `frontend/` and its Playwright e2e specs are retired for `ui/`. The chart
+  keeps the published name `provenance-collector` (ArgoCD Applications and `helm upgrade` keep
+  working; `helm upgrade` does not check the chart name), version 0.2.0; pack-metadata `name`
+  stays the repo name `provenance-collector-pack`, display name "Security Posture", level back to
+  experimental. Their `config.*` values are template aliases of `provenance.*`
+  (`chart/templates/_compat.tpl`); `schedule`, `persistence.mode`, `frontend.keycloak.url` and a
+  non-empty `config.namespaces` fail the render with the replacement (a cron expression is not
+  translated to `scanner.intervalHours`). Grace keeps `nameOverride:
+  nebari-security-posture-pack` so names, selectors and PVCs survive the chart rename.
+- 2026-10-03 (provenance engine): The worker runs the Go collector once per scan
+  (`provenance-collector --once --output <file>`, new single-run mode; report on stdout with
+  `--output -`, logs then on stderr) and ingests its report (`provenance/collector.py`);
+  `PROVENANCE_ENGINE=collector|python`, default `collector` when the binary exists. Python stays
+  as per-image fallback (records without a digest, images not in the report) and whole-run
+  fallback (binary error / timeout / bad report), so switching engines never loses coverage.
+  Report matching: digest+namespace, then namespace+spec image, then digest anywhere; the
+  workload (ReplicaSet/Job vs controller, prefix match) only breaks ties. Keyless / KMS cosign
+  verification stays in Python (the collector reads key files only). The worker image build
+  context became the repo root (`api/Dockerfile.worker.dockerignore` limits it to `api/` and
+  `collector/`). Collector RBAC needs (pods, namespaces, apps/batch owners, secrets for Helm)
+  are already covered by the reader ClusterRole and the optional helm-releases ClusterRole;
+  the configmaps verbs of their chart were only for their ConfigMap sink and are not added.
+
 ## Grace deployment status (2026-10-03, phase 2)
 
 - Deployed: api/worker `10f6df7-1790990443` (phase 2: §12 provenance + §13 control evidence

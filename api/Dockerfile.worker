@@ -1,15 +1,33 @@
 # syntax=docker/dockerfile:1
 # Nebari Security Posture worker: same Python package as the API plus pinned scanner
-# binaries (trivy client, grype, clairctl, cosign) and skopeo. Build context: api/
+# binaries (trivy client, grype, clairctl, cosign), skopeo, and the Go
+# provenance-collector (collector/) used as the provenance engine.
+#
+# Build context: the REPOSITORY ROOT (the collector lives outside api/):
+#   docker build -f api/Dockerfile.worker -t security-posture-worker:dev .
+# api/Dockerfile.worker.dockerignore keeps the context to api/ + collector/.
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG GO_IMAGE=golang:1.26
+
+# Go provenance-collector (single-run mode: --once --output <file>).
+FROM ${GO_IMAGE} AS collector
+WORKDIR /src
+COPY collector/go.mod collector/go.sum ./
+RUN go mod download
+COPY collector/ ./
+ARG COLLECTOR_VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags="-s -w -X github.com/nebari-dev/provenance-collector/internal/report.Version=${COLLECTOR_VERSION}" \
+      -o /out/provenance-collector ./cmd/provenance-collector \
+ && /out/provenance-collector --help 2>&1 | grep -q -- --once
 
 FROM ${PYTHON_IMAGE} AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /src
-COPY pyproject.toml README.md alembic.ini ./
-COPY src ./src
+COPY api/pyproject.toml api/README.md api/alembic.ini ./
+COPY api/src ./src
 RUN pip install --upgrade pip==25.2 && pip install .
 
 FROM ${PYTHON_IMAGE} AS tools
@@ -39,7 +57,7 @@ RUN set -eux; \
 
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="security-posture-worker" \
-      org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
+      org.opencontainers.image.source="https://github.com/nebari-dev/provenance-collector-pack"
 # skopeo for mirroring; pango/harfbuzz/fonts for WeasyPrint (SAR PDF from reports.autoGenerate)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends skopeo ca-certificates \
@@ -49,6 +67,7 @@ RUN apt-get update \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
  && mkdir -p /cache /data/reports && chown 10001:10001 /cache /data/reports
 COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /dl/cosign /usr/local/bin/
+COPY --from=collector /out/provenance-collector /usr/local/bin/provenance-collector
 COPY --from=builder /opt/venv /opt/venv
 # Everything the tools write goes under /cache (PVC) or /tmp (emptyDir): the root fs
 # can be read-only.
@@ -68,6 +87,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     TRIVY_CACHE_DIR=/cache/trivy-client \
     TRIVY_NO_PROGRESS=true \
     TUF_ROOT=/cache/sigstore \
+    PROVENANCE_COLLECTOR_BIN=/usr/local/bin/provenance-collector \
     WORKER_HEALTH_PORT=9000
 USER 10001:10001
 VOLUME ["/cache"]

@@ -13,7 +13,7 @@ RUN pip install --upgrade pip==25.2 && pip install .
 
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="security-posture-api" \
-      org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
+      org.opencontainers.image.source="https://github.com/nebari-dev/provenance-collector-pack"
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -42,7 +42,7 @@ Images (build context `api/`):
 
 ```bash
 docker build -f Dockerfile.api    -t security-posture-api:dev .
-docker build -f Dockerfile.worker -t security-posture-worker:dev .
+docker build -f Dockerfile.worker -t security-posture-worker:dev ..   # context = repo root (bundles ../collector)
 # both run as uid 10001 with a read-only root fs:
 docker run --read-only -u 10001 --tmpfs /tmp -e DATABASE_URL=... security-posture-api:dev
 docker run --read-only -u 10001 --tmpfs /tmp -v cache:/cache -e DATABASE_URL=... security-posture-worker:dev
@@ -102,6 +102,8 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `PROVENANCE_HELM_CHART_REPOS` | empty | worker | `https://…` index.yaml repos / `oci://host/path` prefixes for chart update checks |
 | `PROVENANCE_RECHECK_HOURS` | `24` | both | reuse a digest's signature/SBOM/provenance results |
 | `PROVENANCE_CONCURRENCY` / `PROVENANCE_REGISTRY_TIMEOUT` | `8` / `30` | worker | registry concurrency / per-request timeout (s) |
+| `PROVENANCE_ENGINE` | `collector` | worker | `collector`: run the bundled Go `provenance-collector --once` per scan and ingest its report (per-image and whole-run fallback to python); `python`: python checks only. Missing binary = `python` |
+| `PROVENANCE_COLLECTOR_BIN` / `PROVENANCE_COLLECTOR_TIMEOUT` | `/usr/local/bin/provenance-collector` / `1800` | worker | collector binary path / run timeout (s) |
 | `PROVENANCE_COMPAT_INTERNAL_PORT` | unset | api | second, unauthenticated listener serving only `/api/reports*`, `/api/export`, `/healthz` (Grafana) |
 | `COSIGN_BIN` | `cosign` | worker | cosign binary (pinned v3.1.3 in the worker image; TUF cache `TUF_ROOT=/cache/sigstore`) |
 

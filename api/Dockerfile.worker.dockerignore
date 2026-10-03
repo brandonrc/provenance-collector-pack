@@ -1,0 +1,12 @@
+# Context for api/Dockerfile.worker is the repository root; send only what the
+# build needs (BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile).
+**
+!api/pyproject.toml
+!api/README.md
+!api/alembic.ini
+!api/src/**
+!collector/**
+**/__pycache__
+**/*.pyc
+collector/bin
+collector/coverage.out

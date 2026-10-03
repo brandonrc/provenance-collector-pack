@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     provenance_registry_timeout: float = 30
     provenance_compat_internal_port: int | None = None  # unauthenticated /api/reports* listener (Grafana)
     cosign_bin: str = "cosign"
+    # provenance engine (docs/PROVENANCE.md "Engines"): collector = run the bundled Go
+    # provenance-collector once per scan and ingest its report (falls back to the
+    # python checks per image and on any binary error); python = python checks only.
+    provenance_engine: str = "collector"
+    provenance_collector_bin: str = "/usr/local/bin/provenance-collector"
+    provenance_collector_timeout: float = 1800
 
     # control evidence engine (DESIGN §13)
     controls_engine_enabled: bool = True

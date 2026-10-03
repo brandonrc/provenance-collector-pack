@@ -1,0 +1,118 @@
+{
+  "metadata": {
+    "generatedAt": "2026-10-03T06:00:00.123456789Z",
+    "collectorVersion": "0.2.0",
+    "clusterName": "grace",
+    "namespacesScanned": [
+      "app",
+      "monitoring",
+      "registry-test"
+    ]
+  },
+  "images": [
+    {
+      "image": "ghcr.io/org/web:1.0",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "namespace": "app",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "web-5d4f8c7b9"
+      },
+      "signature": {
+        "signed": true,
+        "verified": false
+      },
+      "sbom": {
+        "hasSBOM": true,
+        "format": "spdx"
+      },
+      "provenance": {
+        "hasProvenance": true,
+        "predicateType": "https://slsa.dev/provenance/v0.2"
+      },
+      "update": {
+        "currentTag": "1.0",
+        "latestInMajor": "1.4.2",
+        "newestAvailable": "2.1.0",
+        "updateAvailable": true
+      }
+    },
+    {
+      "image": "ghcr.io/org/web:1.0",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "namespace": "app",
+      "workload": {
+        "kind": "Job",
+        "name": "web-migrate-29311200"
+      },
+      "signature": {
+        "signed": true,
+        "verified": false
+      },
+      "sbom": {
+        "hasSBOM": true,
+        "format": "spdx"
+      }
+    },
+    {
+      "image": "grafana/grafana:11.2.0",
+      "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "namespace": "monitoring",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "grafana-7c9d"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false
+      }
+    },
+    {
+      "image": "localhost:32000/team/tool:dev",
+      "namespace": "registry-test",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "tool-6b5"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false,
+        "error": "checking signature existence: Get \"https://localhost:32000/v2/\": dial tcp 127.0.0.1:32000: connect: connection refused"
+      }
+    },
+    {
+      "image": "quay.io/gone/ghost:3.0",
+      "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "namespace": "deleted-meanwhile",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "ghost-1"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false
+      }
+    }
+  ],
+  "helmReleases": [
+    {
+      "releaseName": "kube-prom-stack",
+      "namespace": "observability",
+      "chart": "kube-prometheus-stack",
+      "version": "65.1.0",
+      "appVersion": "v0.77.1",
+      "status": "deployed"
+    }
+  ],
+  "summary": {
+    "totalImages": 5,
+    "uniqueImages": 4,
+    "signedImages": 2,
+    "verifiedImages": 0,
+    "imagesWithSBOM": 2,
+    "imagesWithProvenance": 1,
+    "imagesWithUpdates": 1,
+    "totalHelmReleases": 1,
+    "helmReleasesWithUpdates": 0
+  }
+}

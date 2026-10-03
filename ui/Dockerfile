@@ -14,7 +14,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 LABEL org.opencontainers.image.title="security-posture-ui" \
       org.opencontainers.image.description="Nebari Security Posture pack UI (static SPA + /api proxy)" \
-      org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
+      org.opencontainers.image.source="https://github.com/nebari-dev/provenance-collector-pack"
 
 USER root
 RUN rm -f /etc/nginx/conf.d/default.conf

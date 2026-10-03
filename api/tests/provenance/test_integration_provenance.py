@@ -200,3 +200,88 @@ async def test_04_disabled_restores_old_weights(env):
     assert scan["score"] == round(0.7 * scan["vulnScore"] + 0.3 * scan["postureScore"], 1)
     assert len((await c.get("/api/reports")).json()) == 2  # scan 3 has no provenance results
     await c.put("/api/v1/settings", json={"provenance": {"enabled": True}})
+
+
+def collector_report():
+    """What the Go collector would report for `inventory()`: web resolved and signed with
+    an SBOM, alpine unresolved (no digest -> python), busybox missing (-> python)."""
+    return {
+        "metadata": {"generatedAt": "2026-10-03T06:00:00Z", "collectorVersion": "0.2.0-test",
+                     "namespacesScanned": ["app", "kube-system"]},
+        "images": [
+            {"image": "ghcr.io/org/web:1.0", "digest": D_APP, "namespace": "app",
+             "workload": {"kind": "ReplicaSet", "name": "web-6f7"},
+             "signature": {"signed": True, "verified": False}, "sbom": {"hasSBOM": True, "format": "cyclonedx"},
+             "update": {"currentTag": "1.0", "latestInMajor": "1.1.0", "newestAvailable": "1.1.0",
+                        "updateAvailable": True}},
+            {"image": "alpine:3.17.0", "namespace": "kube-system", "workload": {"kind": "ReplicaSet", "name": "coredns-1"},
+             "signature": {"signed": False, "verified": False, "error": "dial tcp: i/o timeout"}},
+        ],
+        "helmReleases": [{"releaseName": "from-collector", "namespace": "app", "chart": "web-chart",
+                          "version": "1.0.0", "appVersion": "1.0", "status": "deployed"}],
+        "summary": {},
+    }
+
+
+async def test_05_collector_engine_ingest_and_fallback(env):
+    from posture.provenance.stage import ProvenanceStage
+
+    c = env["client"]
+    r = await c.put("/api/v1/settings", json={"provenance": {"enabled": True}})
+    assert r.status_code == 200
+    reg = fake_registry()
+    configs = []
+
+    async def runner(cfg):
+        configs.append(cfg)
+        return collector_report()
+
+    assert (await c.post("/api/v1/scans", json={"force": True})).status_code == 202
+    w = make_worker(env, reg)
+    w.provenance_stage = ProvenanceStage(env["settings"], env["sm"], registry_factory=lambda: reg,
+                                         cosign_factory=lambda cfg: FakeCosign({"ghcr.io/org/web@"}),
+                                         helm_discover=fake_helm, collector_runner=runner)
+    assert await w.poll_once() is True
+    scan_id = max(s["id"] for s in (await c.get("/api/v1/scans")).json())
+    scan = (await c.get(f"/api/v1/scans/{scan_id}")).json()
+    assert scan["status"] == "done", scan
+    eng = [ln for ln in scan["log"] if "provenance engine=collector (0.2.0-test)" in ln]
+    assert eng and "-> 1 image(s) ingested" in eng[0] and "1 image(s) unresolved" in eng[0], scan["log"]
+    assert any("(engine=collector 1, engine=python 2)" in ln for ln in scan["log"]), scan["log"]
+    assert configs and configs[0].cluster_name == "grace-test"
+    imgs = {i["ref"]: i for i in (await c.get("/api/v1/images")).json()["items"]}
+    web = imgs["ghcr.io/org/web:1.0"]["provenance"]
+    # the KMS key from test_02 is not a file: collector checks existence, cosign CLI verifies
+    assert web["signature"] == {"signed": True, "verified": True}
+    assert web["sbom"] == {"hasSBOM": True, "format": "cyclonedx"} and web["provenance"] == {"hasProvenance": False}
+    alpine = imgs["docker.io/library/alpine:3.17.0"]["provenance"]
+    assert alpine["update"]["newestAvailable"] == "4.0.0"  # python fallback walked the fake registry
+    helm = (await c.get("/api/v1/helm-releases")).json()
+    assert [h["releaseName"] for h in helm] == ["from-collector"]
+
+
+async def test_06_collector_failure_falls_back_to_python(env):
+    from posture.provenance.stage import ProvenanceStage
+
+    c = env["client"]
+    reg = fake_registry()
+
+    async def runner(cfg):
+        from posture.provenance.collector import CollectorError
+
+        raise CollectorError("provenance-collector exited 1: boom")
+
+    assert (await c.post("/api/v1/scans", json={"force": True})).status_code == 202
+    w = make_worker(env, reg)
+    w.provenance_stage = ProvenanceStage(env["settings"], env["sm"], registry_factory=lambda: reg,
+                                         cosign_factory=lambda cfg: FakeCosign({"ghcr.io/org/web@"}),
+                                         helm_discover=fake_helm, collector_runner=runner)
+    assert await w.poll_once() is True
+    scan_id = max(s["id"] for s in (await c.get("/api/v1/scans")).json())
+    scan = (await c.get(f"/api/v1/scans/{scan_id}")).json()
+    assert scan["status"] == "done"
+    assert any("provenance engine=collector failed (provenance-collector exited 1: boom); engine=python for all 3"
+               in ln for ln in scan["log"]), scan["log"]
+    web = {i["ref"]: i for i in (await c.get("/api/v1/images")).json()["items"]}["ghcr.io/org/web:1.0"]["provenance"]
+    assert web["signature"] == {"signed": True, "verified": True} and web["sbom"]["format"] == "spdx"
+    assert [h["releaseName"] for h in (await c.get("/api/v1/helm-releases")).json()] == ["web", "dns"]

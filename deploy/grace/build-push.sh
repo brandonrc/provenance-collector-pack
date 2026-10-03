@@ -28,7 +28,7 @@ build_push() {
 for component in ${ONLY}; do
   case "${component}" in
     api)    build_push api    api/Dockerfile.api    api ;;
-    worker) build_push worker api/Dockerfile.worker api ;;
+    worker) build_push worker api/Dockerfile.worker . ;;  # context: repo root (bundles collector/)
     ui)     build_push ui     ui/Dockerfile         ui ;;
     *) echo "unknown component: ${component}" >&2; exit 1 ;;
   esac

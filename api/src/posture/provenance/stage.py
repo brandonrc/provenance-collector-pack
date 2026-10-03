@@ -7,6 +7,12 @@ from `sh.helm.release.v1.*` Secrets. Persists `image_provenance` / `helm_release
 rows for the scan plus the denormalized `images.provenance` summary, and returns
 the per-image `SupplyChainInputs` the cluster aggregation needs.
 
+Engines (`PROVENANCE_ENGINE`, docs/PROVENANCE.md "Engines"): with `collector`
+(default when the binary exists) the bundled Go provenance-collector runs once and
+its report is ingested (`collector.py`); images it does not cover or could not
+resolve, and every image when the binary fails, go through the python checks
+below. With `python` only the python checks run.
+
 Never fails the scan: every error becomes a row-level `error` / scan log line.
 """
 
@@ -16,6 +22,7 @@ import asyncio
 import hashlib
 import json
 import os
+import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -31,11 +38,13 @@ from ..images import ImageRef, has_mutable_tag
 from ..inventory_model import InventorySnapshot
 from ..logs import get_logger
 from ..scoring import grade
+from . import collector as collector_mod
 from . import helm as helm_mod
 from .checks import (
     CosignCli,
     CosignConfig,
     CosignVerifier,
+    SignatureInfo,
     collect_attestations,
     provenance_info,
     sbom_info,
@@ -146,12 +155,31 @@ class ProvenanceStage:
     def __init__(self, env: Settings, sessionmaker: async_sessionmaker[AsyncSession],
                  registry_factory: Callable[[], Registry] | None = None,
                  cosign_factory: Callable[[CosignConfig], CosignVerifier] | None = None,
-                 helm_discover: Callable[[list[str]], Awaitable[tuple[list[helm_mod.HelmRelease], list[str]]]] | None = None):
+                 helm_discover: Callable[[list[str]], Awaitable[tuple[list[helm_mod.HelmRelease], list[str]]]] | None = None,
+                 collector_runner: Callable[[collector_mod.CollectorConfig], Awaitable[dict[str, Any]]] | None = None):
         self.env = env
         self.sm = sessionmaker
         self.registry_factory = registry_factory or self._default_registry
         self.cosign_factory = cosign_factory or (lambda cfg: CosignCli(cfg, env.cosign_bin))
         self.helm_discover = helm_discover or helm_mod.discover
+        self.collector_runner = collector_runner
+        self.engine = (env.provenance_engine or collector_mod.ENGINE_COLLECTOR).strip().lower()
+        if collector_runner is None and self.engine == collector_mod.ENGINE_COLLECTOR:
+            binary = collector_mod.resolve_bin(env.provenance_collector_bin)
+            if binary is None:
+                log.warning("provenance.collector_missing", path=env.provenance_collector_bin,
+                            msg="provenance engine=collector requested but the binary is missing; using engine=python")
+                self.engine = collector_mod.ENGINE_PYTHON
+            else:
+                timeout = env.provenance_collector_timeout
+
+                async def _run(cfg: collector_mod.CollectorConfig) -> dict[str, Any]:
+                    return await collector_mod.run_collector(binary, cfg, timeout)
+
+                self.collector_runner = _run
+        elif self.engine != collector_mod.ENGINE_COLLECTOR:
+            self.engine = collector_mod.ENGINE_PYTHON
+            self.collector_runner = None
 
     def _default_registry(self) -> Registry:
         rewrite = self.env.rewrite_map
@@ -207,9 +235,33 @@ class ProvenanceStage:
                     outcomes.append(ImageOutcome(w.image_id, w.ref.digest, now(), None, None, None, {}, {},
                                                  f"internal error: {e}"[:500], SupplyChainInputs(), None, w.ref.tag))
 
+        collected: dict[int, ImageOutcome] = {}
+        collector_helm: list[helm_mod.HelmRelease] | None = None
+        if self.collector_runner is not None:
+            try:
+                collected, collector_helm, engine_msg = await self._collector_pass(
+                    items, inv, key_to_id, ps, verifier, cosign_cfg, fp)
+                log_line(engine_msg)
+                log.info("provenance.collector_ingested", scan_id=scan_id, msg=engine_msg)
+            except Exception as e:  # noqa: BLE001  (binary error, timeout, bad JSON): python does everything
+                collected, collector_helm = {}, None
+                msg = f"provenance engine=collector failed ({str(e)[:300]}); engine=python for all {len(items)} image(s)"
+                log.warning("provenance.collector_failed", scan_id=scan_id, error=str(e)[:500])
+                log_line(msg)
+        outcomes.extend(collected.values())
+        remaining = [w for w in items if w.image_id not in collected]
         try:
-            await asyncio.gather(*(one(w) for w in items))
-            helm_rows, helm_errors = await self._helm(ps, reg) if ps.helm_releases else ([], [])
+            await asyncio.gather(*(one(w) for w in remaining))
+            if not ps.helm_releases:
+                helm_rows, helm_errors = [], []
+            elif collector_helm:
+                helm_rows, helm_errors = collector_helm, []
+                if ps.check_updates and self.env.provenance_helm_chart_repos:
+                    await helm_mod.check_chart_updates(
+                        helm_rows, helm_mod.ChartRepos(list(self.env.provenance_helm_chart_repos)),
+                        skip_prerelease=ps.skip_prerelease, update_level=ps.update_level, registry=reg)
+            else:  # engine=python, or the collector found none (its helm discovery errors are only logged)
+                helm_rows, helm_errors = await self._helm(ps, reg)
         finally:
             closer = getattr(reg, "aclose", None)
             if closer is not None:
@@ -222,13 +274,84 @@ class ProvenanceStage:
         errors = sum(1 for o in outcomes if o.error)
         msg = (f"provenance: {len(outcomes)} image(s), {signed} signed, {with_sbom} with SBOM, {with_prov} with "
                f"provenance, {errors} registry error(s); {len(helm_rows)} helm release(s) "
-               f"in {int((now() - started).total_seconds())}s")
+               f"in {int((now() - started).total_seconds())}s "
+               f"(engine=collector {len(collected)}, engine=python {len(outcomes) - len(collected)})")
         log_line(msg)
         for e in helm_errors[:5]:
             log_line(f"provenance: helm: {e}")
         log.info("provenance.done", scan_id=scan_id, images=len(outcomes), signed=signed, sbom=with_sbom,
                  provenance=with_prov, errors=errors, helm=len(helm_rows))
         return {o.image_id: o.inputs for o in outcomes}
+
+    # ------------------------------------------------------------ collector
+    def collector_config(self, ps: ProvenanceSettings, key_file: str) -> collector_mod.CollectorConfig:
+        auth_file = self.env.registry_auth_file or (
+            os.path.join(os.environ["DOCKER_CONFIG"], "config.json") if os.environ.get("DOCKER_CONFIG") else None)
+        return collector_mod.CollectorConfig(
+            verify_signatures=ps.verify_signatures, cosign_public_key_file=key_file, check_sbom=ps.check_sbom,
+            check_provenance=ps.check_provenance, check_updates=ps.check_updates, update_level=ps.update_level,
+            skip_prerelease=ps.skip_prerelease, helm_enabled=ps.helm_releases,
+            exclude_namespaces=list(self.env.excluded_namespaces),
+            registry_timeout_seconds=self.env.provenance_registry_timeout, registry_auth_file=auth_file,
+            cluster_name=self.env.cluster_name)
+
+    async def _collector_pass(self, items: list[ImageWork], inv: InventorySnapshot, key_to_id: dict[str, int],
+                              ps: ProvenanceSettings, verifier: CosignVerifier | None, cosign_cfg: CosignConfig,
+                              fp: str) -> tuple[dict[int, ImageOutcome], list[helm_mod.HelmRelease], str]:
+        assert self.collector_runner is not None
+        with tempfile.TemporaryDirectory(prefix="posture-cosign-") as keydir:
+            key_file = (collector_mod.cosign_key_for_collector(ps.cosign_public_key, keydir)
+                        if ps.verify_signatures else "")
+            report = await self.collector_runner(self.collector_config(ps, key_file))
+        collector_mod.validate_report(report)
+        version = (report.get("metadata") or {}).get("collectorVersion") or "unknown"
+        res = collector_mod.match_report(report, inv.containers, key_to_id, {w.image_id: w.ref.digest for w in items})
+        by_id = {w.image_id: w for w in items}
+        # The collector verified with the key file itself; keyless / KMS verification
+        # (no key file) is done here with the cosign CLI on the signed digests.
+        post_verifier = verifier if not key_file else None
+        out: dict[int, ImageOutcome] = {}
+        unresolved = 0
+        for iid, recs in res.matched.items():
+            w = by_id.get(iid)
+            if w is None:
+                continue
+            ing = collector_mod.ingest_records(recs, check_sbom=ps.check_sbom, check_provenance=ps.check_provenance,
+                                               check_updates=ps.check_updates,
+                                               verify_signatures=ps.verify_signatures)
+            if not ing.resolved:
+                unresolved += 1
+                continue
+            out[iid] = await self._outcome_from_collector(w, ing, ps, post_verifier, cosign_cfg.enabled, fp, version)
+        for rec in res.unmatched[:10]:
+            log.info("provenance.collector_unmatched", image=rec.get("image"), namespace=rec.get("namespace"),
+                     workload=rec.get("workload"), digest=rec.get("digest"))
+        helm = collector_mod.helm_releases(report) if ps.helm_releases else []
+        msg = (f"provenance engine=collector ({version}): {len(report.get('images') or [])} report record(s) -> "
+               f"{len(out)} image(s) ingested (matched by digest {res.how['digest']}, by image "
+               f"{res.how['image']}, by digest in another namespace {res.how['digest-any-namespace']}); "
+               f"{len(res.unmatched)} unmatched record(s); {unresolved} image(s) unresolved by the collector and "
+               f"{len(items) - len(out) - unresolved} not in its report go to engine=python; "
+               f"{len(helm)} helm release(s)")
+        return out, helm, msg
+
+    async def _outcome_from_collector(self, w: ImageWork, ing: collector_mod.IngestedImage, ps: ProvenanceSettings,
+                                      verifier: CosignVerifier | None, cosign_on: bool, fp: str,
+                                      version: str) -> ImageOutcome:
+        sig = ing.signature
+        if sig is not None and verifier is not None and sig.get("signed") and not sig.get("verified"):
+            digest = w.ref.digest or ing.digest
+            pull = f"{w.ref.name}@{digest}" if digest else w.ref.pullable
+            sig = (await verify_signature(SignatureInfo(signed=True), verifier, pull,
+                                          self._insecure(w.ref.registry))).as_json()
+        updates = ing.updates
+        primary = w.ref.tag if w.ref.tag in updates else (sorted(updates)[0] if updates else w.ref.tag)
+        upd = UpdateInfo.from_json(updates.get(primary or "")) if primary is not None else None
+        inputs = build_inputs(sig, ing.sbom, ing.provenance, upd, ps, cosign_on)
+        details = {"config": fp, "engine": collector_mod.ENGINE_COLLECTOR, "collectorVersion": version,
+                   "resolvedDigest": ing.digest, "workloads": ing.workloads[:20]}
+        return ImageOutcome(w.image_id, w.ref.digest or ing.digest, now(), sig, ing.sbom, ing.provenance, updates,
+                            details, None, inputs, supply_chain_score(inputs, w.mutable), primary)
 
     async def _previous(self, s: AsyncSession, image_ids: list[int]) -> dict[int, ImageProvenance]:
         if not image_ids:

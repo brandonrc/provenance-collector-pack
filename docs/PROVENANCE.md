@@ -1,13 +1,77 @@
 # Supply-chain provenance (DESIGN §12)
 
-The security posture pack does everything
-[provenance-collector-pack](https://github.com/nebari-dev/provenance-collector-pack)
-does (signatures, SBOM and SLSA provenance attestations, image update checks, Helm
-releases) as a worker stage, scores it, tags it with 800-53 controls, and serves
-their API so their Grafana dashboards and consumers keep working. This page covers
-what is compatible, where we differ, and how to switch a Grafana dashboard over.
+The pack records supply-chain provenance for every running image (signatures, SBOM
+and SLSA provenance attestations, image update checks, Helm releases) as a worker
+stage, scores it, tags it with 800-53 controls, and serves the provenance-collector
+report API so existing Grafana dashboards and consumers keep working. The checks are
+done by the Go provenance collector in `collector/` (see "Engines"), with the
+worker's Python port as fallback. This page covers the engines, what is compatible,
+where the Python port differs, and how to switch a Grafana dashboard over.
 
-## How it runs
+## Engines
+
+Since the merge into provenance-collector-pack the **Go provenance collector
+(`collector/`) is the provenance engine**. The worker image compiles it in a
+build stage and installs it at `/usr/local/bin/provenance-collector`. Selection:
+
+| `provenance.engine` / `PROVENANCE_ENGINE` | behaviour |
+|---|---|
+| `collector` (default) | Once per scan the stage runs `provenance-collector --once --output <tmp>/report.json` under the worker's ServiceAccount, with `PROVENANCE_*` built from the effective settings (below), and ingests the report. Falls back to `python` per image and for the whole run (see below). If the binary is missing the worker logs `provenance.collector_missing` and uses `python`. |
+| `python` | The worker's own checks (the rest of this page). |
+
+Settings passed to the binary: `verifySignatures`, `checkSBOM`, `checkProvenance`,
+`checkUpdates`, `updateLevel`, `skipPrerelease`, `helmReleases` (→
+`PROVENANCE_HELM_ENABLED`), `scanner.excludedNamespaces` (→
+`PROVENANCE_EXCLUDE_NAMESPACES`), `registryTimeoutSeconds`, `REGISTRY_AUTH_FILE` /
+`DOCKER_CONFIG` (→ `PROVENANCE_REGISTRY_AUTH`) and `CLUSTER_NAME`. A cosign key given as
+PEM text is written to a temporary file for the run, a key file path is passed
+through; KMS / remote keys and keyless identities are not supported by the collector,
+so it then only checks signature existence and the stage runs `cosign verify` (the
+Python verifier) on the digests the collector reported as signed.
+
+**Ingest (adapter, `api/src/posture/provenance/collector.py`).** Each report record
+(`image`, `digest`, `namespace`, `workload{kind,name}`) is mapped to an image id:
+
+1. same namespace and the collector's resolved `digest` equals the running digest;
+2. same namespace and the same spec image string (the tag was re-pushed since the pod
+   started);
+3. the digest in any namespace.
+
+The collector reports the owning ReplicaSet / Job, the inventory the controller, so the
+workload only breaks ties (`web-5d4f8` belongs to Deployment `web`). Records of one image
+are folded: signature / SBOM / provenance from the first resolved record, an
+`updates{tag: UpdateInfo}` entry per tag. Absent `sbom` / `provenance` / `update` in
+their report means "checked, none found" / "no update" for enabled checks. The rows
+land in `image_provenance` / `images.provenance` exactly like Python results, with
+`details.engine = "collector"`, `details.collectorVersion` and `details.workloads`.
+Unmatched records (a pod deleted between the inventory and the collector run) are
+logged (`provenance.collector_unmatched`) and dropped. Helm releases come from the
+report (`revision` / `lastDeployed` are not in their schema and stay empty); chart
+update checks against `helmReleases.chartRepos` still run.
+
+**Fallbacks.** Images whose records have no `digest` (the collector could not reach the
+registry: node-local aliases such as `localhost:32000` that only resolve on the node,
+private CAs, rate limits) and images the report does not cover go through the Python
+checks in the same scan, which apply `MIRROR_REWRITE`, the extra CA bundle and the
+"unknown, not failed" rule. If the binary fails (non-zero exit, timeout
+`PROVENANCE_COLLECTOR_TIMEOUT`, unreadable report) every image goes through Python. If
+Helm discovery is on and the report has no Helm releases (the collector only logs Helm
+errors), Python discovery runs. The scan log shows the split:
+
+```
+provenance engine=collector (0.2.0): 74 report record(s) -> 61 image(s) ingested (matched by digest 70, by image 3, by digest in another namespace 0); 1 unmatched record(s); 5 image(s) unresolved by the collector and 2 not in its report go to engine=python; 31 helm release(s)
+provenance: 68 image(s), ... (engine=collector 61, engine=python 7)
+```
+
+**Differences that come with the collector engine** (versus the Python checks below):
+no per-digest result reuse (`recheckHours` applies to Python results only; the collector
+re-checks every image each scan); a failed key verification is `signed: false` with the
+error (their semantics) rather than `signed: true, verified: false`; signature / SBOM /
+provenance detection is theirs (fallback tag, BuildKit index attestations, `.sig` /
+`.att`), so sigstore-bundle signatures and `.sbom` tags found by the Python checks are
+not seen for collector-ingested images.
+
+## How it runs (engine=python)
 
 The worker's `provenance` stage starts right after inventory and runs while the CVE
 scanners run. Per unique image digest it does the following:
