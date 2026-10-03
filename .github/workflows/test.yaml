@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Called by release.yaml so a release cannot publish untested code.
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # Use exactly the toolchain setup-go installs from go.mod's `toolchain`
+  # directive; never auto-download a different one.
+  GOTOOLCHAIN: local
 
 jobs:
   unit-test:
@@ -16,8 +26,26 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: go.mod / go.sum are tidy
+        run: go mod tidy -diff
+
       - name: Run tests
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      # Floor for the library packages. Upstream main was at 73.8% before the
+      # registry/discovery/verify tests landed; ratchet this up, never down.
+      - name: Coverage floor (internal/...)
+        env:
+          FLOOR: "85.0"
+        run: |
+          { head -n1 coverage.out; grep '/internal/' coverage.out; } > internal.out
+          total=$(go tool cover -func=internal.out | awk '/^total:/ {sub("%","",$3); print $3}')
+          echo "internal/... coverage: ${total}% (floor ${FLOOR}%)"
+          echo "### Go coverage (internal/...): ${total}% (floor ${FLOOR}%)" >> "$GITHUB_STEP_SUMMARY"
+          awk -v t="$total" -v f="$FLOOR" 'BEGIN { exit !(t+0 >= f+0) }' || {
+            echo "::error::internal/... coverage ${total}% is below the ${FLOOR}% floor"
+            exit 1
+          }
 
       - name: Upload coverage
         if: github.event_name == 'pull_request'
@@ -25,6 +53,39 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Fails on any vulnerability the code actually reaches (symbol level),
+      # except the allowlisted IDs below, each of which has no fixed version.
+      # Remove an entry as soon as a fix is available.
+      #   GO-2026-4529  cosign/v2: expired intermediate certs accepted when the
+      #                 tlog is skipped. We verify with a public key, not a
+      #                 certificate chain; fixed only in cosign v3.
+      #   GO-2026-5932  x/crypto/openpgp is deprecated; pulled in by
+      #                 sigstore dependencies, not called with untrusted input.
+      - name: govulncheck
+        env:
+          ALLOW: "GO-2026-4529 GO-2026-5932"
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./... || true
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -format json ./... > vuln.json
+          found=$(jq -r 'select(.finding != null and .finding.trace[0].function != null) | .finding.osv' vuln.json | sort -u)
+          bad=""
+          for id in $found; do
+            case " $ALLOW " in *" $id "*) echo "allowlisted: $id" ;; *) bad="$bad $id" ;; esac
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::reachable vulnerabilities:$bad"
+            exit 1
+          fi
 
   frontend-test:
     runs-on: ubuntu-latest

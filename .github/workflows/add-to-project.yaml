@@ -13,7 +13,7 @@ jobs:
     # `gh api` call. Dependency bumps don't belong on the project board
     # anyway, so skip them.
     if: github.actor != 'dependabot[bot]'
-    uses: nebari-dev/.github/.github/workflows/sync-project-priority.yaml@main
+    uses: nebari-dev/.github/.github/workflows/sync-project-priority.yaml@a6c757c72124a03542a79ac5385fd250ee9c45b7 # main
     with:
       project-id: PVT_kwDOBd3CI84BKoKt
     secrets:

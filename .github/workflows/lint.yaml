@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Called by release.yaml so a release cannot publish unlinted code.
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   go-lint:
@@ -33,6 +38,11 @@ jobs:
 
       - name: Verify docs/configuration.md is up to date
         run: go run ./hack/gendocs --check
+
+      # schema/report.schema.json is generated from internal/report/types.go
+      # and is the published report contract; it must not drift.
+      - name: Verify schema/report.schema.json is up to date
+        run: go run ./hack/genschema --check
 
   helm-lint:
     runs-on: ubuntu-latest

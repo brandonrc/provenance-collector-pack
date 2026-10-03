@@ -2,6 +2,8 @@ module github.com/nebari-dev/provenance-collector
 
 go 1.25.0
 
+toolchain go1.26.8
+
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/docker/cli v29.4.3+incompatible

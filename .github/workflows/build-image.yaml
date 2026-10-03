@@ -20,8 +20,9 @@ on:
       - "Dockerfile"
       - "frontend/**"
       - ".github/workflows/build-image.yaml"
-  release:
-    types: [published]
+  # Releases build images through release.yaml (workflow_call), after tests
+  # and lint pass, so the chart is never published ahead of its images.
+  workflow_call:
   workflow_dispatch:
 
 # Cancel in-flight PR builds when a new commit lands on the same PR; leave
