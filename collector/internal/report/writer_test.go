@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -232,5 +233,53 @@ func TestConfigMapWriter(t *testing.T) {
 	err = writer.Write(context.Background(), testReport())
 	if err != nil {
 		t.Fatalf("unexpected error on update: %v", err)
+	}
+}
+
+func TestFileWriter_Path(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+	if err := NewFileWriter(path, io.Discard).Write(context.Background(), testReport()); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading report: %v", err)
+	}
+	var got ProvenanceReport
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("report is not JSON: %v", err)
+	}
+	if got.Metadata.ClusterName != "test-cluster" || len(got.Images) != 1 {
+		t.Errorf("unexpected report: %+v", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("expected only the report file (no temp leftovers), got %d entries", len(entries))
+	}
+	// Overwrite in place.
+	if err := NewFileWriter(path, io.Discard).Write(context.Background(), testReport()); err != nil {
+		t.Fatalf("second Write: %v", err)
+	}
+}
+
+func TestFileWriter_Stdout(t *testing.T) {
+	var buf bytes.Buffer
+	if err := NewFileWriter("-", &buf).Write(context.Background(), testReport()); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var got ProvenanceReport
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not a single JSON document: %v\n%s", err, buf.String())
+	}
+	if got.Images[0].Digest != "sha256:abc123" {
+		t.Errorf("unexpected digest %q", got.Images[0].Digest)
+	}
+}
+
+func TestFileWriter_MissingDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "report.json")
+	if err := NewFileWriter(path, io.Discard).Write(context.Background(), testReport()); err == nil {
+		t.Fatal("expected an error for a missing directory")
 	}
 }

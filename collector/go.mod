@@ -6,6 +6,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/google/go-containerregistry v0.21.4
 	github.com/sigstore/cosign/v2 v2.6.3
+	github.com/sigstore/sigstore v1.10.3
 	helm.sh/helm/v3 v3.20.1
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
@@ -130,7 +131,6 @@ require (
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
 	github.com/sigstore/rekor v1.4.3 // indirect
 	github.com/sigstore/rekor-tiles/v2 v2.0.1 // indirect
-	github.com/sigstore/sigstore v1.10.3 // indirect
 	github.com/sigstore/sigstore-go v1.1.4 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.0.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect

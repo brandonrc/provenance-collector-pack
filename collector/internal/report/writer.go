@@ -195,3 +195,58 @@ func (w *ConfigMapWriter) Write(ctx context.Context, report *ProvenanceReport) e
 	}
 	return nil
 }
+
+// FileWriter writes a single report as indented JSON to a file path, or to an
+// io.Writer (stdout) when the path is "-". Used by the single-run mode
+// (`provenance-collector --once --output <path|->`): no dashboard, PVC layout,
+// retention or ConfigMap, just the report document, so another process (the
+// security posture worker) can ingest it.
+type FileWriter struct {
+	path   string
+	stdout io.Writer
+}
+
+// NewFileWriter creates a Writer for path. path "-" writes to stdout.
+func NewFileWriter(path string, stdout io.Writer) Writer {
+	return &FileWriter{path: path, stdout: stdout}
+}
+
+func (w *FileWriter) Write(_ context.Context, report *ProvenanceReport) error {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling report: %w", err)
+	}
+	data = append(data, '\n')
+	if w.path == "-" {
+		if _, err := w.stdout.Write(data); err != nil {
+			return fmt.Errorf("writing report to stdout: %w", err)
+		}
+		return nil
+	}
+	// Write to a temp file in the same directory and rename, so a reader never
+	// sees a half-written report.
+	dir := filepath.Dir(w.path)
+	tmp, err := os.CreateTemp(dir, ".provenance-report-*.json")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("writing report to %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("closing %s: %w", tmpName, err)
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("chmod %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, w.path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("writing report to %s: %w", w.path, err)
+	}
+	return nil
+}

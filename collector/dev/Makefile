@@ -1,102 +1,39 @@
-# Local development helpers using kind
+# Local development helpers for the Go collector (run from collector/dev/).
+#
+# The pack's chart (../../chart) no longer deploys the collector CronJob or the
+# Go dashboard: the security posture worker runs the collector binary once per
+# scan. These targets exercise the binary and the standalone dashboard locally
+# against whatever cluster your KUBECONFIG points at (kind, grace, ...).
 
-CLUSTER_NAME ?= provenance-dev
-RELEASE      ?= pc
-NAMESPACE    ?= provenance-system
+DASHBOARD_ADDR          ?= :8080
+DASHBOARD_INTERNAL_ADDR ?= :8081
+REPORTS                 ?= $(CURDIR)/.reports
 
-.PHONY: cluster-create cluster-delete build-load deploy test-run logs report down \
-        ui-up seed ui-forward ui-dev
+.PHONY: build once dashboard seed clean
 
-cluster-create:
-	kind create cluster --name $(CLUSTER_NAME)
+build:
+	$(MAKE) -C .. build
 
-cluster-delete:
-	kind delete cluster --name $(CLUSTER_NAME)
+# One collection, report JSON on stdout (logs on stderr), exactly what the
+# worker runs. Signature/update checks are off by default here to keep it fast;
+# override with PROVENANCE_VERIFY_SIGNATURES=true etc.
+once: build
+	PROVENANCE_VERIFY_SIGNATURES=$${PROVENANCE_VERIFY_SIGNATURES:-false} \
+	PROVENANCE_CHECK_UPDATES=$${PROVENANCE_CHECK_UPDATES:-false} \
+		../bin/provenance-collector --once --output - | jq .summary
 
-build-load:
-	docker build --build-arg VERSION=dev -t provenance-collector:dev ..
-	kind load docker-image provenance-collector:dev --name $(CLUSTER_NAME)
+# Standalone dashboard (API only) on :8080, internal upload endpoint on :8081,
+# reports under ./.reports. Auth is disabled when PROVENANCE_OIDC_ISSUER is unset.
+dashboard: build
+	mkdir -p $(REPORTS)
+	PROVENANCE_DASHBOARD_ADDR=$(DASHBOARD_ADDR) \
+	PROVENANCE_DASHBOARD_INTERNAL_ADDR=$(DASHBOARD_INTERNAL_ADDR) \
+	PROVENANCE_REPORT_PATH=$(REPORTS) \
+		../bin/dashboard
 
-deploy: build-load
-	helm upgrade --install pc ../chart/ \
-		--set image.repository=provenance-collector \
-		--set image.tag=dev \
-		--set image.pullPolicy=Never \
-		--set persistence.mode=configmap \
-		--set webUI.enabled=false \
-		--set config.verifySignatures=false \
-		--set config.checkUpdates=false
-
-test-run:
-	kubectl delete job manual-run --ignore-not-found
-	kubectl create job --from=cronjob/pc-provenance-collector manual-run
-	kubectl wait --for=condition=complete job/manual-run --timeout=120s
-	kubectl logs job/manual-run
-
-logs:
-	kubectl logs job/manual-run
-
-report:
-	kubectl get configmap provenance-report -o jsonpath='{.data.report\.json}' | jq .
-
-down:
-	kind delete cluster --name $(CLUSTER_NAME)
-
-# -----------------------------------------------------------------------------
-# UI development: deploy the chart with the web dashboard (API) enabled (http
-# mode) and seed it with rich sample reports, then run the React UI via Vite
-# (`make ui-dev`). The dashboard is now API-only — the SPA is served by Vite in
-# dev (and by the standalone nginx `frontend` image in production). Use these
-# for dashboard/UI work; the `deploy` target above runs the collector headless
-# (configmap mode, no UI).
-# -----------------------------------------------------------------------------
-
-# Build + load the image, then install the chart with the dashboard API turned
-# on. frontend.enabled=false because in dev the SPA is served by Vite, not the
-# in-cluster nginx image (which isn't built locally) — see `ui-dev`.
-ui-up: build-load
-	helm upgrade --install $(RELEASE) ../chart/ \
-		--namespace $(NAMESPACE) --create-namespace \
-		--set image.repository=provenance-collector \
-		--set image.tag=dev \
-		--set image.pullPolicy=Never \
-		--set webUI.enabled=true \
-		--set frontend.enabled=false \
-		--set config.verifySignatures=false \
-		--set webUI.features.timelineDeltas=true
-	kubectl rollout status deploy/$(RELEASE)-provenance-collector-web \
-		-n $(NAMESPACE) --timeout=120s
-
-# Run the React dev server (Vite) against the in-cluster dashboard API. Opens a
-# port-forward to the dashboard (localhost:8080), which Vite proxies /api to,
-# and starts Vite at http://localhost:5173 with auth bypassed
-# (VITE_DEV_NO_AUTH=true) to match the dashboard's disabled-auth dev posture.
-ui-dev:
-	@echo "Vite dev server -> http://localhost:5173  (proxying /api to the dashboard)"
-	@kubectl port-forward -n $(NAMESPACE) \
-		svc/$(RELEASE)-provenance-collector-web 8080:8080 >/dev/null 2>&1 & \
-	pf=$$!; \
-	trap "kill $$pf 2>/dev/null" EXIT; \
-	for i in 1 2 3 4 5; do \
-		curl -sf http://localhost:8080/healthz >/dev/null 2>&1 && break; sleep 1; \
-	done; \
-	cd ../frontend && VITE_DEV_NO_AUTH=true WEBAPI_URL=http://localhost:8080 npm run dev
-
-# Seed the dashboard with three timestamped sample reports. Opens a temporary
-# port-forward to the internal upload Service, uploads, then tears it down.
+# Seed the running standalone dashboard with sample reports (timeline history).
 seed:
-	@echo "seeding sample reports via internal upload endpoint..."
-	@kubectl port-forward -n $(NAMESPACE) \
-		svc/$(RELEASE)-provenance-collector-web-internal 8081:8081 >/dev/null 2>&1 & \
-	pf=$$!; \
-	trap "kill $$pf 2>/dev/null" EXIT; \
-	for i in 1 2 3 4 5; do \
-		curl -sf http://localhost:8081/healthz >/dev/null 2>&1 && break; sleep 1; \
-	done; \
 	python3 seed-reports.py http://localhost:8081/internal/reports
 
-# Port-forward the public dashboard (blocks). Open http://localhost:8080.
-ui-forward:
-	@echo "dashboard at http://localhost:8080 (Ctrl+C to stop)"
-	kubectl port-forward -n $(NAMESPACE) \
-		svc/$(RELEASE)-provenance-collector-web 8080:8080
+clean:
+	rm -rf $(REPORTS)

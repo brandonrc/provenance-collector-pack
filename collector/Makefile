@@ -1,10 +1,11 @@
+# Go collector (provenance-collector) and standalone dashboard. Run from collector/.
 VERSION ?= dev
 IMAGE   ?= ghcr.io/nebari-dev/provenance-collector
 TAG     ?= $(VERSION)
 
 LDFLAGS := -s -w -X github.com/nebari-dev/provenance-collector/internal/report.Version=$(VERSION)
 
-.PHONY: build test lint docs docs-check checkenvs docker-build docker-push helm-lint clean
+.PHONY: build test lint docs docs-check checkenvs docker-build docker-push helm-lint run-once clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/provenance-collector ./cmd/provenance-collector
@@ -15,13 +16,13 @@ test:
 
 lint:
 	golangci-lint run ./...
-	helm lint chart/
 
-# Regenerate docs/configuration.md from internal/configspec/spec.go.
+# Regenerate ../docs/src/content/docs/collector-environment.md from
+# internal/configspec/spec.go.
 docs:
 	go run ./hack/gendocs
 
-# CI guard: fail if docs/configuration.md is stale relative to the spec OR
+# CI guard: fail if collector-environment.md is stale relative to the spec OR
 # if a source file references an env var not present in the spec.
 docs-check: checkenvs
 	go run ./hack/gendocs --check
@@ -37,9 +38,16 @@ docker-build:
 docker-push: docker-build
 	docker push $(IMAGE):$(TAG)
 
+# The chart lives at the repository root (../chart) and deploys the security
+# posture api/worker/ui; the worker image bundles this collector.
 helm-lint:
-	helm lint chart/
-	helm template test chart/ | kubeconform -strict -ignore-missing-schemas
+	helm dependency build ../chart
+	helm lint ../chart
+	helm template test ../chart | kubeconform -strict -ignore-missing-schemas
+
+# Single run against the current kubeconfig, report to stdout (logs on stderr).
+run-once: build
+	./bin/provenance-collector --once --output - > provenance-report.json
 
 clean:
-	rm -rf bin/ coverage.out
+	rm -rf bin/ coverage.out provenance-report.json

@@ -1,8 +1,9 @@
-// gendocs renders docs/src/content/docs/configuration.md from internal/configspec.Vars.
+// gendocs renders ../docs/src/content/docs/collector-environment.md (relative to
+// collector/) from internal/configspec.Vars.
 //
 // Usage:
 //
-//	go run ./hack/gendocs           # write docs/src/content/docs/configuration.md
+//	go run ./hack/gendocs           # write ../docs/src/content/docs/collector-environment.md
 //	go run ./hack/gendocs --check   # exit 1 if the file on disk is stale
 //
 // `--check` exists so CI can fail a PR that touches the spec but doesn't
@@ -19,7 +20,7 @@ import (
 	"github.com/nebari-dev/provenance-collector/internal/configspec"
 )
 
-const outputPath = "docs/src/content/docs/configuration.md"
+const outputPath = "../docs/src/content/docs/collector-environment.md"
 
 var docTemplate = template.Must(template.New("doc").Funcs(template.FuncMap{
 	"defaultCell": func(d string) string {
@@ -34,24 +35,28 @@ var docTemplate = template.Must(template.New("doc").Funcs(template.FuncMap{
 		return "`" + d + "`"
 	},
 }).Parse(`---
-title: Configuration Reference
-description: Environment variables read by the collector and dashboard binaries. Generated from internal/configspec/spec.go.
+title: Collector environment variables
+description: Environment variables read by the Go collector and standalone dashboard binaries. Generated from collector/internal/configspec/spec.go.
 ---
 
 <!-- GENERATED FILE — do not edit by hand.
-     Source of truth: internal/configspec/spec.go.
-     Regenerate with: make docs (or: go run ./hack/gendocs)
+     Source of truth: collector/internal/configspec/spec.go.
+     Regenerate with: cd collector && make docs (or: go run ./hack/gendocs)
      CI guards drift between this file and the spec. -->
 
-> **Generated** from ` + "`internal/configspec/spec.go`" + `. Edit the spec and run ` + "`make docs`" + ` to update this file.
+> **Generated** from ` + "`collector/internal/configspec/spec.go`" + `. Edit the spec and run ` + "`make docs`" + ` in ` + "`collector/`" + ` to update this file.
 
-The collector and dashboard binaries are configured entirely via environment
-variables. When deployed with the Helm chart, these are set through
-` + "`values.yaml`" + ` and rendered into the relevant pod's env block.
+The Go collector and the standalone dashboard binary are configured entirely
+via environment variables. In the pack, the security posture worker runs the
+collector once per scan (` + "`provenance-collector --once --output <file>`" + `) and sets
+these variables from the chart's ` + "`provenance.*`" + ` values (see
+[Configuration](../configuration/)); the standalone dashboard is not deployed by
+the chart. The command-line flags ` + "`--once`" + ` and ` + "`--output <path|->`" + ` bypass
+the ` + "`PROVENANCE_REPORT_OUTPUT`" + ` sink.
 
 ## Collector
 
-Read by ` + "`cmd/provenance-collector`" + ` (the CronJob).
+Read by ` + "`cmd/provenance-collector`" + `.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
@@ -71,7 +76,7 @@ Read by both binaries.
 
 ## Dashboard
 
-Read by ` + "`cmd/dashboard`" + ` (the web UI pod).
+Read by ` + "`cmd/dashboard`" + ` (standalone dashboard, not deployed by the chart).
 
 | Variable | Type | Default | Description |
 |---|---|---|---|

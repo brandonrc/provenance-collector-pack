@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,10 +16,58 @@ import (
 	"github.com/nebari-dev/provenance-collector/internal/registry"
 	"github.com/nebari-dev/provenance-collector/internal/report"
 	"github.com/nebari-dev/provenance-collector/internal/verify"
+	"k8s.io/client-go/kubernetes"
 )
 
+// options are the command-line flags. With neither flag set the collector
+// behaves exactly as before: one collection, written to the sink chosen by
+// PROVENANCE_REPORT_OUTPUT (http, pvc or configmap).
+type options struct {
+	// once requests a single run whose report goes to output instead of the
+	// configured sink. Implies output "-" when output is empty.
+	once bool
+	// output is a file path, or "-" for stdout. When set, the report is
+	// written there and PROVENANCE_REPORT_OUTPUT / the upload URL are ignored.
+	output string
+}
+
+func parseFlags(args []string, stderr io.Writer) (options, error) {
+	var o options
+	fs := flag.NewFlagSet("provenance-collector", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.BoolVar(&o.once, "once", false, "run one collection and write the report to --output (default stdout) instead of the configured sink")
+	fs.StringVar(&o.output, "output", "", `write the report JSON to this file path, or "-" for stdout, instead of the configured sink`)
+	if err := fs.Parse(args); err != nil {
+		return o, err
+	}
+	if fs.NArg() > 0 {
+		return o, fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if o.once && o.output == "" {
+		o.output = "-"
+	}
+	return o, nil
+}
+
+// logWriter keeps stdout clean for the report when it is written to stdout.
+func logWriter(o options) io.Writer {
+	if o.output == "-" {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	opts, err := parseFlags(os.Args[1:], os.Stderr)
+	if err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logWriter(opts), &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
 
@@ -26,7 +76,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx); err != nil {
+	if err := run(ctx, opts); err != nil {
 		slog.Error("collection failed", "error", err)
 		os.Exit(1)
 	}
@@ -34,7 +84,7 @@ func main() {
 	slog.Info("provenance collection completed successfully")
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context, opts options) error {
 	cfg := config.Load()
 
 	retention := cfg.ReportRetention.String()
@@ -52,7 +102,7 @@ func run(ctx context.Context) error {
 		"checkSBOM", cfg.CheckSBOM,
 		"checkProvenance", cfg.CheckProvenance,
 		"helmEnabled", cfg.HelmEnabled,
-		"reportOutput", cfg.ReportOutput,
+		"reportOutput", effectiveOutput(cfg, opts),
 		"reportRetention", retention,
 		"registryTimeout", cfg.RegistryTimeout,
 		"clusterName", cfg.ClusterName,
@@ -157,22 +207,9 @@ func run(ctx context.Context) error {
 	provReport := gen.Generate(ctx, imageInputs, helmSources, nsList)
 
 	// --- Write report ---
-	var writer report.Writer
-	switch cfg.ReportOutput {
-	case "configmap":
-		slog.Info("writing report to configmap", "name", cfg.ReportConfigMap, "namespace", cfg.ReportConfigMapNamespace)
-		writer = report.NewConfigMapWriter(client, cfg.ReportConfigMap, cfg.ReportConfigMapNamespace)
-	case "pvc":
-		slog.Info("writing report to filesystem", "path", cfg.ReportPath, "retention", cfg.ReportRetention)
-		writer = report.NewPVCWriter(cfg.ReportPath, cfg.ReportRetention)
-	case "http", "":
-		if cfg.ReportUploadURL == "" {
-			return fmt.Errorf("PROVENANCE_REPORT_UPLOAD_URL is required when PROVENANCE_REPORT_OUTPUT=http")
-		}
-		slog.Info("uploading report to dashboard", "url", cfg.ReportUploadURL, "timeout", cfg.ReportUploadTimeout)
-		writer = report.NewHTTPWriter(cfg.ReportUploadURL, cfg.ReportUploadTimeout)
-	default:
-		return fmt.Errorf("unknown PROVENANCE_REPORT_OUTPUT %q (expected http, pvc, or configmap)", cfg.ReportOutput)
+	writer, err := selectWriter(cfg, opts, client, os.Stdout)
+	if err != nil {
+		return err
 	}
 
 	if err := writer.Write(ctx, provReport); err != nil {
@@ -187,4 +224,36 @@ func run(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+func effectiveOutput(cfg *config.Config, opts options) string {
+	if opts.output != "" {
+		return "file:" + opts.output
+	}
+	return cfg.ReportOutput
+}
+
+// selectWriter picks the report sink: --output wins, otherwise
+// PROVENANCE_REPORT_OUTPUT (http by default).
+func selectWriter(cfg *config.Config, opts options, client kubernetes.Interface, stdout io.Writer) (report.Writer, error) {
+	if opts.output != "" {
+		slog.Info("writing report to file", "path", opts.output)
+		return report.NewFileWriter(opts.output, stdout), nil
+	}
+	switch cfg.ReportOutput {
+	case "configmap":
+		slog.Info("writing report to configmap", "name", cfg.ReportConfigMap, "namespace", cfg.ReportConfigMapNamespace)
+		return report.NewConfigMapWriter(client, cfg.ReportConfigMap, cfg.ReportConfigMapNamespace), nil
+	case "pvc":
+		slog.Info("writing report to filesystem", "path", cfg.ReportPath, "retention", cfg.ReportRetention)
+		return report.NewPVCWriter(cfg.ReportPath, cfg.ReportRetention), nil
+	case "http", "":
+		if cfg.ReportUploadURL == "" {
+			return nil, fmt.Errorf("PROVENANCE_REPORT_UPLOAD_URL is required when PROVENANCE_REPORT_OUTPUT=http (or pass --output)")
+		}
+		slog.Info("uploading report to dashboard", "url", cfg.ReportUploadURL, "timeout", cfg.ReportUploadTimeout)
+		return report.NewHTTPWriter(cfg.ReportUploadURL, cfg.ReportUploadTimeout), nil
+	default:
+		return nil, fmt.Errorf("unknown PROVENANCE_REPORT_OUTPUT %q (expected http, pvc, or configmap)", cfg.ReportOutput)
+	}
 }

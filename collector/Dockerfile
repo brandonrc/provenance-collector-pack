@@ -1,3 +1,7 @@
+# Collector + standalone dashboard image. Build context: collector/
+#   docker build -t provenance-collector:dev collector/
+# The security posture worker image (api/Dockerfile.worker) compiles the same
+# collector binary in its own build stage.
 # Build stage
 FROM golang:1.25-alpine AS builder
 
