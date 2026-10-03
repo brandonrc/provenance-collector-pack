@@ -1,304 +1,555 @@
-# =============================================================================
-# Image
-# =============================================================================
-image:
-  repository: quay.io/nebari/provenance-collector
-  tag: ""  # defaults to Chart appVersion
-  pullPolicy: IfNotPresent
-
-imagePullSecrets: []
-
-# =============================================================================
-# CronJob Schedule
-# =============================================================================
-# Cron expression for how often the collector runs.
-schedule: "0 6 * * *"  # Daily at 06:00 UTC
+# Default values for nebari-security-posture-pack.
+#
+# Contract: docs/DESIGN.md (sections 3, 5, 8). Every component runs in the
+# release namespace. The namespace MUST carry `nebari.dev/managed: "true"`
+# when nebariapp.enabled is true or the nebari-operator ignores the NebariApp.
+#
+# This file contains NO secrets. Database credentials are generated into
+# Secret <fullname>-db on first install (and kept across upgrades), or read
+# from an existing Secret you name.
 
 # =============================================================================
-# Collector Configuration
+# Images
 # =============================================================================
-config:
-  # Namespaces to scan (empty = all namespaces).
-  namespaces: []
-  # Namespaces to exclude from scanning.
-  excludeNamespaces: []
-  # Verify cosign signatures on discovered images.
-  verifySignatures: true
-  # Path or KMS URI for cosign public key (empty = existence check only).
-  cosignPublicKey: ""
-  # Discover deployed Helm releases.
-  helmEnabled: true
-  # Check registries for newer image/chart versions.
-  checkUpdates: true
-  # Skip pre-release versions (alpha, beta, rc) when checking for updates.
-  skipPrerelease: true
-  # Minimum version bump to flag as an update: "patch", "minor", or "major".
-  # "patch" flags all updates, "minor" ignores patch-only bumps, "major" only
-  # flags major version changes.
-  updateLevel: "patch"
-  # Check for SBOM attestations on discovered images.
-  checkSBOM: true
-  # Check for SLSA provenance attestations on discovered images.
-  checkProvenance: true
-  # Filesystem path used by the dashboard pod (and by the cron pod in pvc mode).
-  reportPath: /reports
-  # How long the dashboard keeps old reports on disk. Use Go duration format
-  # (168h = 1 week). Set to "-1" to disable cleanup and keep all reports.
-  reportRetention: "168h"
-  # ConfigMap name for configmap mode.
-  reportConfigMap: provenance-report
-  # Timeout for registry operations.
-  registryTimeout: 30s
-  # Cluster name included in report metadata (informational).
-  clusterName: ""
-  # Timeout for uploading a report in http mode.
-  reportUploadTimeout: 30s
-
-# =============================================================================
-# Web Dashboard
-# =============================================================================
-# Hosts the report UI and, in http mode, the internal upload endpoint that the
-# collector Job POSTs to. webUI.enabled must be true when persistence.mode=http.
-webUI:
-  enabled: true
-  replicas: 1
-  # Public port (UI + read API: /, /api/reports, /api/reports/{filename}).
-  port: 8080
-  # Internal port (POST /internal/reports, /healthz). Exposed only through
-  # the {fullname}-web-internal Service — never put this behind an Ingress.
-  internalPort: 8081
-  # Max body size (bytes) accepted on the internal upload endpoint.
-  uploadMaxBytes: 16777216  # 16 MiB
-  # Opt-in dashboard features. All default off; flip individually.
-  features:
-    # Renders a +N / -N unique-image delta badge on each timeline card,
-    # showing how the report changed vs the previous (older) scan. Useful
-    # once you have enough scan history to notice drift at a glance.
-    timelineDeltas: false
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
-  # Base URL the dashboard pod uses to call the issuer's /userinfo endpoint and
-  # resolve the caller's groups. Required for the "Run Scan" button to be
-  # visible; leave empty to disable.
-  #
-  # This is the URL the dashboard *calls* — it does not need to match the `iss`
-  # claim inside the user's token. The dashboard never validates `iss` itself;
-  # it forwards the bearer to userinfo and trusts the issuer to accept or
-  # reject it. So in split-horizon setups (external hostname for browsers,
-  # internal cluster DNS for backends) you point this at whichever URL the pod
-  # can actually reach.
-  #
-  # Example (Nebari in-cluster Keycloak):
-  #   http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/realms/nebari
-  oidcIssuer: ""
-  # Keycloak groups whose members are allowed to trigger a manual scan from the
-  # web UI. Empty disables the "Run Scan" button entirely. Group matching is
-  # exact and case-sensitive; use the same form Keycloak returns in the token
-  # (typically with a leading "/").
-  adminGroups: []
-  # How long a finished manual scan Job lingers before the TTLAfterFinished
-  # controller deletes it. Manual Jobs aren't tracked by the CronJob's
-  # successfulJobsHistoryLimit, so without a TTL they would accumulate. Use
-  # any Go duration string ("1h", "30m", "24h"). Set to "0" to disable the
-  # TTL and keep manual Jobs around for debugging.
-  manualJobTTL: "1h"
-
-# =============================================================================
-# Frontend (React SPA)
-# =============================================================================
-# The dashboard UI is a standalone React app served by its own nginx image and
-# Deployment. nginx serves the SPA and reverse-proxies /api/* to the dashboard
-# (-web) Service over cluster DNS. Requires webUI.enabled=true (the proxy
-# target). The NebariApp routes gateway traffic here, not at the dashboard.
-frontend:
-  # Set enabled=false to skip the frontend (e.g. an API-only / headless install).
-  enabled: true
-  replicas: 1
-  image:
-    repository: ghcr.io/nebari-dev/provenance-collector-pack/frontend
-    # tag defaults to .Chart.AppVersion when empty so the chart and image
-    # versions move together. Override to pull a specific build.
-    tag: ""
+# First-party images (api, worker, ui) are built from this repo. Third-party
+# images are pinned. A non-empty `digest` (sha256:...) wins over `tag`.
+images:
+  api:
+    repository: quay.io/nebari/nebari-security-posture-pack-api
+    tag: "0.1.0"
+    digest: ""
     pullPolicy: IfNotPresent
-  # Port nginx listens on. Must be > 1024 - the container runs as non-root
-  # (UID 101) with all capabilities dropped and cannot bind privileged ports.
-  port: 8080
-  service:
-    port: 8080
-  # Optional browser-tab title override rendered into config.json.
-  title: ""
-  # Branding settings — rendered into /config.json at deploy time and applied by
-  # the SPA before it mounts. Leave everything empty to use the built-in Nebari
-  # defaults (no visual change from an unbranded install). Outside Kubernetes the
-  # same fields resolve from a local config.json or BRANDING_* env vars — see
-  # docs/configuration and frontend/docker-entrypoint.sh.
-  branding:
-    # URL to a custom logo shown in the header. Leave empty for the built-in
-    # Nebari logo. May be an absolute http(s) URL or a root-relative path.
-    logoUrl: ""
-    # URL to a custom dark-mode logo. Leave empty to fall back to logoUrl, then
-    # the built-in Nebari dark logo.
-    logoUrlDark: ""
-    # URL to a custom favicon. Leave empty for the built-in favicon.
-    faviconUrl: ""
-    # CSS variable overrides injected at runtime — no image rebuild required.
-    # Values are validated in the browser and rejected if they contain CSS
-    # injection characters (';', '{', '}', quotes, url(), javascript:, etc.).
-    # Supported tokens: primary, primaryForeground, primaryHover, background,
-    # foreground, secondary, secondaryForeground, muted, mutedForeground,
-    # accent, accentForeground, border, ring, radius, sidebarPrimary,
-    # sidebarPrimaryForeground, sidebarRing.
-    # primaryHover, sidebarPrimary, sidebarPrimaryForeground and sidebarRing are
-    # derived from primary / primaryForeground / ring by the SPA's stylesheet —
-    # setting primary alone rebrands hover and sidebar states too. Set them only
-    # to pin a specific shade.
-    # Keys are passed through to CSS as-is (no allow-list is enforced at deploy
-    # or at runtime), so any other theme variable the SPA defines can be set
-    # here — but only the tokens above are supported and covered by compatibility
-    # guarantees.
-    # Example:
-    #   theme:
-    #     light:
-    #       primary: "oklch(55% 0.19 250)"
-    #       primaryForeground: "#ffffff"
-    #     dark:
-    #       primary: "oklch(62% 0.21 250)"
-    theme:
-      light: {}
-      dark: {}
-  # Keycloak connection settings rendered into /config.json at deploy time and
-  # fetched by the SPA at startup, so the image needs no build-time config.
+  worker:
+    # api image + trivy, grype, clairctl and skopeo binaries.
+    repository: quay.io/nebari/nebari-security-posture-pack-worker
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  ui:
+    repository: quay.io/nebari/nebari-security-posture-pack-ui
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  trivy:
+    repository: aquasec/trivy
+    tag: "0.75.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  clair:
+    repository: quay.io/projectquay/clair
+    tag: "4.9.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  postgres:
+    # Also used for the wait-for-db init containers (pg_isready).
+    repository: postgres
+    tag: "16-alpine"
+    digest: ""
+    pullPolicy: IfNotPresent
+
+# =============================================================================
+# Admin gating
+# =============================================================================
+# Keycloak groups allowed to use the pack. Feeds all three gating layers:
+#   1. nebariapp.auth.groups (gateway enforcement on operators that support it)
+#   2. the optional chart-rendered SecurityPolicy (adminGate.securityPolicy)
+#   3. ADMIN_GROUPS for the API's own JWT verification
+# A leading "/" is ignored when matching (NIC's realm mapper emits "/group",
+# grace's operator mapper emits "group"); the SecurityPolicy accepts both.
+adminGroups:
+  - admin
+
+adminGate:
+  securityPolicy:
+    # Render an Envoy Gateway SecurityPolicy (OIDC + JWT + authorization
+    # default Deny, allow on the `groups` claim) targeting the HTTPRoute the
+    # operator creates for the NebariApp (<fullname>-route). Use this on
+    # upstream operator builds that only use auth.groups for landing-page
+    # visibility. When enabled, the NebariApp's auth.enforceAtGateway is
+    # rendered false automatically so the route carries exactly one policy;
+    # the operator still provisions the Keycloak client (provisionClient).
+    # Requires nebariapp.enabled.
+    enabled: false
+    # Token issuer as stamped into the `iss` claim (public Keycloak URL).
+    # Also used as oidc.provider.issuer (EG >= 1.9 requires https there).
+    # Example: https://keycloak.example.com/auth/realms/nebari (required when enabled)
+    externalIssuer: ""
+    # In-cluster Keycloak realm URL, used for the back-channel token and
+    # JWKS endpoints (Envoy may not resolve the public FQDN).
+    internalIssuer: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+    # OIDC callback path; must match nebariapp.auth.redirectURI.
+    redirectPath: /oauth2/callback
+    logoutPath: /logout
+    # Cookie holding the ID token (what the operator's policy uses, and what
+    # the API reads).
+    idTokenCookie: NebariIdToken
+    # Override the generated client id (default "<namespace>-<fullname>",
+    # the operator's naming).
+    clientID: ""
+    # Override the client secret Secret (default "<fullname>-oidc-client",
+    # created by the operator when nebariapp.auth.provisionClient is true).
+    clientSecretName: ""
+    # Fields that need a newer Envoy Gateway than grace runs (strict decoding
+    # rejects unknown fields). Enable on EG >= 1.5:
+    #   endSessionEndpoint    - Keycloak logout on /logout
+    #   passThroughAuthHeader - let `Authorization: Bearer` requests skip the
+    #                           OIDC redirect and go straight to JWT checks
+    endSessionEndpoint: false
+    passThroughAuthHeader: false
+
+# =============================================================================
+# API authentication (layer 3)
+# =============================================================================
+auth:
+  # oidc: verify JWT signature/exp/iss + admin group on every request.
+  # disabled: no auth at all; local development ONLY.
+  mode: oidc
+  # JWKS endpoint used to verify token signatures (in-cluster URL).
+  jwksUrl: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs
+  # Accepted `iss` values (list both internal and external issuers). REQUIRED
+  # for mode=oidc: with an empty list the API rejects every token.
+  issuers: []
+
+# =============================================================================
+# Scanning
+# =============================================================================
+scanner:
+  # Images scanned in parallel (each image runs its three scanners concurrently).
+  parallelism: 3
+  # Per-scanner, per-image timeout.
+  timeoutSeconds: 600
+  # Scheduled scan interval.
+  intervalHours: 6
+  # Skip re-scanning a digest scanned more recently than this (unless forced).
+  rescanAfterHours: 24
+  # Namespaces never inventoried (kube-system IS scanned by default).
+  excludedNamespaces: []
+  trivy:
+    # Deploys the trivy server (Deployment + PVC + Service).
+    enabled: true
+  grype:
+    # Grype runs inside the worker; its DB lives on the worker PVC.
+    enabled: true
+  clair:
+    # Deploys Clair in combo mode (uses Postgres database `clair`).
+    enabled: true
+  mirror:
+    # skopeo-copy each digest into an in-cluster registry before scanning so
+    # all three scanners see identical bytes and upstreams are pulled once.
+    enabled: true
+    registry: registry.container-registry.svc.cluster.local:5000
+    # Plain-HTTP registry.
+    insecure: true
+    # Registry host rewrites applied to image refs before pulling (e.g. the
+    # node-local alias of the in-cluster registry). Rendered as
+    # MIRROR_REWRITE="src=dst,...".
+    rewrite:
+      "localhost:32000": registry.container-registry.svc.cluster.local:5000
+
+# Private registry credentials (optional). Name a kubernetes.io/dockerconfigjson
+# Secret in the release namespace; it is mounted into the worker at
+# /etc/posture/docker/config.json (DOCKER_CONFIG / REGISTRY_AUTH_FILE point at
+# it). Pod imagePullSecrets are NOT discovered (v0.1 limitation).
+registryAuth:
+  existingSecret: ""
+
+# Extra CA certificates (PEM) trusted by the worker (python/httpx, cosign,
+# skopeo, trivy, grype, clairctl) and Clair, e.g. an internal registry signed
+# by a private CA. Secret in the release namespace; every key whose name ends
+# in .crt or .pem is added. The worker appends them to the image's system
+# bundle (init container -> SSL_CERT_FILE); Clair gets them via SSL_CERT_DIR
+# next to the default system directories.
+extraCACerts:
+  secretName: ""
+
+logLevel: info
+
+# Compliance reports (DESIGN §11).
+reports:
+  # Where report files are written (PVC persistence.reports when persistence is
+  # enabled, else an emptyDir - files are then lost on restart and reports the
+  # worker generates are not downloadable from the api).
+  dir: /data/reports
+  # Retention: newest N finished reports per type.
+  keepPerType: 50
+  # Default for settings `reports.autoGenerate` (editable in the UI): report
+  # types generated after every completed scan, cluster scope, default format
+  # (poam=xlsx, stig-checklist=cklb, sar=pdf, oscal-ar=json, inventory=xlsx,
+  # vuln-export=csv).
+  autoGenerate: []
+
+# =============================================================================
+# Supply-chain provenance (DESIGN §12)
+# =============================================================================
+# Superset of nebari-dev/provenance-collector-pack: per image digest the worker
+# checks cosign signatures, SBOM and SLSA provenance attestations (OCI
+# referrers, BuildKit attestation manifests, cosign .sig/.att/.sbom tags) and
+# newer semver tags; Helm releases come from sh.helm.release.v1 Secrets.
+# Key names mirror their chart's `config:` block. Every toggle except the
+# cosign key material and helmReleases.chartRepos is also editable at runtime
+# (Settings page / PUT /api/v1/settings `provenance`).
+provenance:
+  enabled: true
+  # Check cosign signatures (theirs: config.verifySignatures). Without a key or
+  # keyless identity below this is an existence check (signed, not verified).
+  verifySignatures: true
+  # cosign public key: PEM text, or a KMS / remote URI cosign understands
+  # (awskms://, gcpkms://, hashivault://, k8s://, https://). Theirs:
+  # config.cosignPublicKey.
+  cosignPublicKey: ""
+  cosign:
+    # Secret (release namespace) with key `cosign.pub`; mounted into the
+    # worker and wins over cosignPublicKey.
+    existingSecret: ""
+    # Keyless (Fulcio/Rekor) verification; both required. Example for
+    # Kubernetes release images: identity "^krel-trust@k8s-releng-prod\.iam\.gserviceaccount\.com$",
+    # issuer "^https://accounts\.google\.com$".
+    certificateIdentityRegexp: ""
+    certificateOidcIssuerRegexp: ""
+  checkSBOM: true
+  checkProvenance: true
+  checkUpdates: true
+  # "patch" flags every newer version, "minor" ignores patch-only bumps,
+  # "major" only flags major version changes.
+  updateLevel: patch
+  # Ignore alpha/beta/rc tags when looking for updates.
+  skipPrerelease: true
+  # Reuse a digest's signature / SBOM / provenance results for this long
+  # (tags are re-listed every scan).
+  recheckHours: 24
+  # Concurrent registry requests from the worker.
+  concurrency: 8
+  registryTimeoutSeconds: 30
+  helmReleases:
+    # Read sh.helm.release.v1.* Secrets cluster-wide. Adds cluster-wide
+    # Secrets get/list to the ClusterRole (every Secret, not only Helm's:
+    # RBAC cannot filter by label). Off by default; theirs: config.helmEnabled.
+    enabled: false
+    # Optional chart sources for the chart update check (theirs never fills
+    # helmReleases[].update): classic repos (index.yaml) and/or OCI prefixes,
+    # e.g. [https://charts.jetstack.io, oci://quay.io/nebari/charts].
+    chartRepos: []
+  compat:
+    # Their Grafana dashboards read /api/reports/latest over an in-cluster
+    # Service without auth. internalService.enabled starts a second listener
+    # in the api (port 8081, ONLY /api/reports*, /api/export, /healthz, no
+    # auth) behind ClusterIP Service <fullname>-web-internal (or `name`). It is
+    # never routed by the gateway; with networkPolicy.enabled only
+    # allowedNamespaces may reach it. Grafana Infinity URL:
+    #   http://<service>.<namespace>.svc:<port>/api/reports/latest
+    internalService:
+      enabled: false
+      # Service name override, e.g. "provenance-collector-web" to keep an
+      # existing dashboard's host name (same namespace required).
+      name: ""
+      port: 8080
+      containerPort: 8081
+      # Namespaces allowed through the NetworkPolicy (e.g. Grafana's).
+      allowedNamespaces:
+        - monitoring
+
+# =============================================================================
+# Control evidence engine (DESIGN §13, docs/CONTROLS.md)
+# =============================================================================
+# After every completed scan (and on POST /compliance/assertions/run) the worker
+# runs live NIST SP 800-53 assertions against Keycloak, the gateway, cert-manager,
+# Kubernetes RBAC/PodSecurity/NetworkPolicy, Loki, Prometheus/Alertmanager and
+# the registry, and derives per-control implementation status (OSCAL SSP).
+controlsEngine:
+  enabled: true
+  # Default for settings controlsEngine.baseline: low | moderate | high.
+  baseline: moderate
+  # Approved privileged subjects (default for settings controlsEngine.adminSubjects):
+  # Keycloak usernames holding the realm admin role, and cluster-admin binding
+  # subjects as User:<name>, Group:<name> or ServiceAccount:<ns>/<name>.
+  adminSubjectsAllowlist: []
+  # Namespaces exempt from the per-namespace checks (PodSecurity, default-deny,
+  # default ServiceAccount automount, workload least privilege).
+  systemNamespaces: [kube-system, kube-public, kube-node-lease]
   keycloak:
-    # Full external Keycloak base URL the browser talks to (Keycloak 17+ does
-    # not use /auth as a context root). Required when frontend.enabled=true.
-    # e.g. https://keycloak.your-cluster.example.com
-    url: ""
+    url: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth
     realm: nebari
-    # Public PKCE SPA client id. Leave empty to use the operator convention
-    # <namespace>-<nebariapp-name>-spa (matches the provisioned client).
-    clientId: ""
+    # Realm the admin credentials belong to: "" tries `realm` first, then
+    # `master` (works with a master-realm super-admin or a realm admin).
+    adminRealm: ""
+    clientId: admin-cli
+    # Group whose members must have OTP/WebAuthn (IA-2(1)); "" = first adminGroups entry.
+    adminGroup: ""
+    verifyTls: true
+    # Secret with `username`/`password` (or `client-id`/`client-secret`, optional
+    # `realm`). The chart grants the ServiceAccount `get` on this one Secret via
+    # a Role in its namespace; nothing else in that namespace is readable.
+    adminSecret:
+      name: nebari-realm-admin-credentials
+      namespace: keycloak
+  # Service URLs; "" = discover Services in the cluster (loki:3100,
+  # *prometheus*:9090, *alertmanager*:9093).
+  lokiUrl: ""
+  prometheusUrl: ""
+  alertmanagerUrl: ""
+  # In-cluster registry probed for anonymous access; "" = scanner.mirror.registry.
+  registryUrl: ""
+  # Per-assertion timeout and the gateway TLS handshake probe (TLS 1.1 must be refused).
+  timeoutSeconds: 30
+  tlsProbe: true
+
+# =============================================================================
+# Database
+# =============================================================================
+database:
+  # SQLAlchemy URL scheme used to build DATABASE_URL (the api is async and
+  # uses asyncpg; plain "postgresql" is normalised to asyncpg by the app).
+  driver: postgresql+asyncpg
+  # How long wait-for-db init containers wait for Postgres.
+  waitTimeoutSeconds: 300
+
+# Bundled Postgres (StatefulSet, plain postgres image - no Bitnami).
+postgresql:
+  enabled: true
+  # Existing Secret with keys `password` (app user) and `postgres-password`
+  # (superuser). Empty: the chart generates <fullname>-db once and keeps it.
+  existingSecret: ""
+  auth:
+    username: posture
+    database: posture
+    # Second database owned by the same user, used by Clair.
+    clairDatabase: clair
   resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 2Gi }
+
+# External Postgres, used when postgresql.enabled is false. Both databases
+# must exist and be owned by `user` (Clair needs CREATE on its database and
+# the trusted `uuid-ossp` extension).
+externalDatabase:
+  host: ""
+  port: 5432
+  user: posture
+  database: posture
+  clairDatabase: clair
+  sslmode: require
+  # Secret holding the password (required when postgresql.enabled is false).
+  existingSecret: ""
+  passwordKey: password
 
 # =============================================================================
 # Persistence
 # =============================================================================
-# mode controls how reports flow from collector → dashboard:
-#   http      — Collector POSTs the report to the dashboard's internal
-#               endpoint (cluster-DNS only). Dashboard owns a single PVC.
-#               No shared volume between pods. Default. Works on ReadWriteOnce
-#               storage classes like Hetzner's csi.hetzner.cloud.
-#   pvc       — Collector and dashboard share one PVC. Requires a
-#               ReadWriteMany-capable storageClass (Longhorn, NFS, EFS, …)
-#               unless every collector pod is guaranteed to land on the same
-#               node as the dashboard.
-#   configmap — Collector writes the report to a ConfigMap; the dashboard is
-#               not used. Useful for headless / inspection-only installs.
 persistence:
-  mode: http
-  # storageClass: required when mode=pvc; recommended when mode=http.
-  # Helm template rendering fails for mode=pvc if this is empty.
+  # false: use emptyDir everywhere (scanner DBs re-download on every restart).
+  enabled: true
+  # "" = cluster default StorageClass.
   storageClass: ""
-  size: 1Gi
-  # accessModes only apply in pvc mode. For mode=pvc on a multi-node cluster
-  # you almost certainly want ReadWriteMany.
-  accessModes:
-    - ReadWriteOnce
+  accessMode: ReadWriteOnce
+  # Worker cache: grype DB, skopeo scratch, clairctl state.
+  worker: 20Gi
+  # Trivy server vulnerability DB cache.
+  trivy: 10Gi
+  postgres: 10Gi
+  # Generated compliance reports (bytes; metadata is in Postgres). Mounted at
+  # reports.dir in the api AND the worker (reports.autoGenerate). With
+  # ReadWriteOnce the worker gets a required podAffinity to the api pod so both
+  # land on the node that has the volume (unless worker.affinity is set).
+  reports: 2Gi
 
 # =============================================================================
-# Registry Credentials
+# Components
 # =============================================================================
-registryCredentials:
-  # Use an existing docker-registry Secret for private registry access.
-  existingSecret: ""
+api:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
-# =============================================================================
-# Resources
-# =============================================================================
-resources:
-  requests:
-    cpu: 100m
-    memory: 256Mi
-  limits:
-    cpu: 500m
-    memory: 512Mi
+worker:
+  # Budget ~2Gi memory per parallel image (scanner.parallelism): grype and the
+  # trivy client load large images' package catalogues in memory.
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "4", memory: 6Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  # Extra env (list of EnvVar) appended to the worker container.
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
-# =============================================================================
-# Job Settings
-# =============================================================================
-backoffLimit: 3
-activeDeadlineSeconds: 3600
-successfulJobsHistoryLimit: 3
-failedJobsHistoryLimit: 3
-concurrencyPolicy: Forbid
+ui:
+  replicas: 1
+  # Port nginx listens on inside the container (unprivileged; also passed as
+  # NGINX_PORT). The Service always exposes port 80.
+  containerPort: 8080
+  service:
+    port: 80
+  # Window title passed in /config.json.
+  title: Security Posture
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile: { type: RuntimeDefault }
+  # nginx writes its config/pid/cache at startup, so the root filesystem is
+  # writable by default; emptyDirs below cover the usual scratch paths.
+  readOnlyRootFilesystem: false
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
-# =============================================================================
-# Service Account & RBAC
-# =============================================================================
+trivy:
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 4Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+clair:
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 4Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile: { type: RuntimeDefault }
+  # Clair log level (debug|info|warn|error).
+  logLevel: info
+  # Vulnerability updater sets (Clair `updaters.sets`). `osv` is left out:
+  # Clair 4.9.0 (claircore 1.5.48) panics while ingesting OSV data with a
+  # malformed CVSS vector ("programmer error: invalid vector constructed"),
+  # which crash-loops the combo process. Language ecosystems are still covered
+  # by Trivy and Grype. Set to [] to use Clair's defaults (all sets).
+  updaterSets: [alpine, aws, debian, oracle, photon, rhel, rhcc, suse, ubuntu, clair.cvss]
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+postgres:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70        # `postgres` in the alpine image
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Container-level security context applied to every container.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
 serviceAccount:
+  # ServiceAccount for api + worker, bound to the read-only ClusterRole.
   create: true
   name: ""
   annotations: {}
 
 rbac:
+  # ClusterRole + ClusterRoleBinding: get/list/watch on workloads, pods,
+  # namespaces, nodes, networkpolicies, serviceaccounts and NebariApps.
+  # No Secret access unless provenance.helmReleases.enabled (get/list).
   create: true
+
+# =============================================================================
+# NetworkPolicy
+# =============================================================================
+# api <- ui, worker | postgres <- api, worker, clair | trivy, clair <- worker
+# ui <- gatewayNamespaces + uiAllowedNamespaces. Egress is unrestricted.
+networkPolicy:
+  enabled: true
+  # Namespace(s) running the Envoy Gateway data plane.
+  gatewayNamespaces:
+    - envoy-gateway-system
+  # Extra namespaces allowed to reach the ui directly (e.g. the landing-page
+  # health prober).
+  uiAllowedNamespaces: []
 
 # =============================================================================
 # Nebari Integration
 # =============================================================================
-# Creates a NebariApp CRD that registers this pack with the nebari-operator.
-# The NebariApp routes gateway traffic to the frontend nginx Service (which
-# proxies /api/* to the dashboard); it requires frontend.enabled=true.
+# NebariApp CR rendered through the nebari-app library chart. String values
+# containing "{{" are tpl-expanded and MUST render to valid JSON (hence the
+# `| toJson`). Requires the namespace label nebari.dev/managed=true.
 nebariapp:
   enabled: false
-  # hostname: provenance.nebari.example.com  # Required when enabled
+  hostname: '{{ fail "nebariapp.hostname is required when nebariapp.enabled is true" }}'
+  # The operator validates that this Service exists; it is the ui Service.
   service:
-    name: ""   # Defaults to <fullname>-frontend
-    port: ""   # Defaults to frontend.service.port
+    name: '{{ printf "%s-ui" (include "security-posture.fullname" .) | toJson }}'
+    port: '{{ .Values.ui.service.port }}'
   routing:
+    # Required: without routes the operator creates no HTTPRoute.
+    routes:
+      - pathPrefix: /
+        pathType: PathPrefix
+    publicRoutes:
+      - pathPrefix: /healthz
+        pathType: Exact
+      # Landing-page tile icon must load for any signed-in user.
+      - pathPrefix: /icon.svg
+        pathType: Exact
     tls:
       enabled: true
   auth:
     enabled: true
     provider: keycloak
-    # Model B: the SPA performs the OIDC login in-browser via keycloak-js, so the
-    # gateway must NOT enforce auth (that would trigger its own oauth2 redirect
-    # ahead of the SPA). The operator still provisions the public SPA client.
-    enforceAtGateway: false
+    provisionClient: true
+    # Gateway OIDC enforcement; turned off automatically when the chart
+    # renders its own SecurityPolicy (adminGate.securityPolicy.enabled).
+    enforceAtGateway: '{{ not .Values.adminGate.securityPolicy.enabled | toJson }}'
+    # Only valid together with enforceAtGateway (operator validation).
+    forwardAccessToken: '{{ not .Values.adminGate.securityPolicy.enabled | toJson }}'
+    # Must be a real callback path (Envoy rejects "/").
+    redirectURI: /oauth2/callback
     scopes:
       - openid
       - profile
       - email
       - groups
-    groups: []
-    # Explicit override for the provisioned public SPA client id. Leave empty to
-    # inherit frontend.keycloak.clientId (which itself defaults to the operator
-    # convention <namespace>-<nebariapp-name>-spa), keeping the provisioned
-    # client and the one the SPA presents in config.json in sync.
-    spaClientId: ""
+    # Grace's operator enforces these at the gateway; upstream alpha.20 uses
+    # them for landing-page visibility only.
+    groups: '{{ .Values.adminGroups | toJson }}'
+  gateway: public
   landingPage:
-    enabled: false
-    displayName: "Provenance Collector"
-    description: "Container image provenance and compliance reports"
-    icon: ""
-    category: "Platform"
-    priority: 10
+    enabled: true
+    displayName: Security Posture
+    description: Container vulnerability & configuration posture across the cluster
+    icon: '{{ printf "https://%s/icon.svg" (tpl .Values.nebariapp.hostname . | trimAll "\"") | toJson }}'
+    category: Platform
+    priority: 20
     healthCheck:
       enabled: true
       path: /healthz
       intervalSeconds: 30
       timeoutSeconds: 5
-  gateway: ""
 
 # =============================================================================
 # Overrides

@@ -1,74 +1,27 @@
+{{/*
+  NebariApp (reconcilers.nebari.dev/v1) - the single integration point with
+  the nebari-operator: HTTPRoute <fullname>-route on the shared gateway, a
+  cert-manager Certificate, and (provisionClient) a Keycloak client whose
+  credentials land in Secret <fullname>-oidc-client.
+
+  Operator rules this is written around:
+    1. The namespace must carry nebari.dev/managed=true or the operator
+       ignores the CR silently. The chart does not own the namespace.
+    2. routing.routes is effectively required (no routes -> no HTTPRoute).
+    3. service.name must reference an existing Service (the ui Service).
+    4. redirectURI must be a real callback path; Envoy rejects "/".
+
+  Spec comes straight from .Values.nebariapp via the nebari-app library chart;
+  strings containing "{{" are tpl-expanded and must render to JSON.
+*/}}
 {{- if .Values.nebariapp.enabled }}
-apiVersion: reconcilers.nebari.dev/v1
-kind: NebariApp
-metadata:
-  name: {{ include "provenance-collector.fullname" . }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "provenance-collector.labels" . | nindent 4 }}
-spec:
-  hostname: {{ required "nebariapp.hostname is required when nebariapp.enabled is true" .Values.nebariapp.hostname }}
-  # The NebariApp targets the frontend nginx Service, which serves the React SPA
-  # and reverse-proxies /api/* to the dashboard over cluster DNS. The dashboard
-  # (-web) Service is never exposed through the gateway.
-  service:
-    name: {{ .Values.nebariapp.service.name | default (printf "%s-frontend" (include "provenance-collector.fullname" .)) }}
-    port: {{ .Values.nebariapp.service.port | default .Values.frontend.service.port }}
-  routing:
-    routes:
-      - pathPrefix: /
-        pathType: PathPrefix
-    {{- with .Values.nebariapp.routing.tls }}
-    tls:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-  {{- with .Values.nebariapp.auth }}
-  # Model B (SPA-managed Keycloak): auth is performed client-side by keycloak-js
-  # (PKCE/S256) in the browser and validated by the dashboard against Keycloak's
-  # userinfo endpoint. enforceAtGateway stays false, so the operator provisions
-  # the public SPA client but emits no gateway SecurityPolicy.
-  auth:
-    enabled: {{ .enabled | default true }}
-    provider: {{ .provider | default "keycloak" }}
-    enforceAtGateway: {{ .enforceAtGateway | default false }}
-    scopes:
-      {{- toYaml (.scopes | default (list "openid" "profile" "email" "groups")) | nindent 6 }}
-    {{- with .groups }}
-    groups:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-    # Public Keycloak client for the React SPA (PKCE, no secret). The client the
-    # operator provisions here must match the client the SPA presents
-    # (frontend.keycloak.clientId, rendered into config.json). To keep them from
-    # drifting, the client id defaults to frontend.keycloak.clientId; spaClientId
-    # is only an explicit override. When both are empty no clientId is emitted
-    # and the operator generates the <namespace>-<nebariapp-name>-spa convention,
-    # which is also what config.json falls back to, so they still agree.
-    spaClient:
-      enabled: true
-      {{- with (.spaClientId | default $.Values.frontend.keycloak.clientId) }}
-      clientId: {{ . | quote }}
-      {{- end }}
-  {{- end }}
-  {{- with .Values.nebariapp.landingPage }}
-  landingPage:
-    enabled: {{ .enabled | default false }}
-    displayName: {{ .displayName | default "Provenance Collector" | quote }}
-    description: {{ .description | default "Container image provenance and compliance reports" | quote }}
-    {{- with .icon }}
-    icon: {{ . | quote }}
-    {{- end }}
-    category: {{ .category | default "Platform" | quote }}
-    priority: {{ .priority | default 10 }}
-    {{- with .healthCheck }}
-    healthCheck:
-      enabled: {{ .enabled | default true }}
-      path: {{ .path | default "/healthz" }}
-      intervalSeconds: {{ .intervalSeconds | default 30 }}
-      timeoutSeconds: {{ .timeoutSeconds | default 5 }}
-    {{- end }}
-  {{- end }}
-  {{- with .Values.nebariapp.gateway }}
-  gateway: {{ . }}
-  {{- end }}
+{{- include "nebari-app.nebariApp" (dict
+    "metadata" (dict
+      "name"      (include "security-posture.fullname" .)
+      "namespace" .Release.Namespace
+      "labels"    (include "security-posture.labels" . | fromYaml)
+    )
+    "spec"   (omit .Values.nebariapp "enabled")
+    "tplCtx" .
+) -}}
 {{- end }}

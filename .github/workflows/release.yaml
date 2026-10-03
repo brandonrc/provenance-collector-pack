@@ -1,167 +1,30 @@
-name: Release
+name: Release Chart
+
+# Releases the chart via the shared reusable workflow in nebari-dev/.github.
+# On a chart/Chart.yaml version bump it pins the three first-party image tags
+# to the release commit's sha, packages the chart, creates a GitHub Release,
+# and opens a PR in nebari-dev/helm-repository (published to
+# quay.io/nebari/charts).
+#
+# Only works for official packs in the nebari-dev org (NEBARI_HELM_REPO_TOKEN
+# and the central helm-repository). build-images.yaml runs on the same bump so
+# the pinned sha-<short> tags exist.
 
 on:
-  release:
-    types: [published]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
-  cancel-in-progress: false
-
-permissions:
-  contents: write
+  push:
+    branches: [main]
+    paths:
+      - "chart/Chart.yaml"
 
 jobs:
-  lint-and-test:
-    name: Lint Helm Chart
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
-      - name: Lint chart
-        run: helm lint chart/
-
-  publish-helm-chart:
-    name: Package and Publish Helm Chart
-    runs-on: ubuntu-latest
-    needs: lint-and-test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
-      - name: Update Chart version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version:.*/version: ${VERSION}/" chart/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" chart/Chart.yaml
-          echo "Chart.yaml after version update:"
-          cat chart/Chart.yaml
-
-      - name: Package Helm chart
-        run: |
-          mkdir -p dist
-          helm package chart/ --destination dist/
-
-      - name: Render release notes from template
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          # Preserve the existing release body (user-written "What's New" section)
-          # and append the install instructions from the template
-          EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body -q .body 2>/dev/null || echo "")
-          # Render template with version
-          sed "s/\${VERSION}/${VERSION}/g" .github/release-template.md > /tmp/rendered-notes.md
-          # If the release already has a body with "What's New", merge them
-          if echo "$EXISTING" | grep -q "What's New"; then
-            # Extract the What's New section from existing body
-            WHATS_NEW=$(echo "$EXISTING" | sed -n '/## What'\''s New/,/## Installation/p' | sed '$ d')
-            # Replace the placeholder in the template
-            sed -i "/## What's New/{N;s/## What's New\n-/${WHATS_NEW}/;}" /tmp/rendered-notes.md 2>/dev/null || true
-          fi
-          gh release edit "${GITHUB_REF_NAME}" -F /tmp/rendered-notes.md
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Helm chart to release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: dist/*.tgz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  sync-helm-repository:
-    name: Sync Chart to Helm Repository
-    runs-on: ubuntu-latest
-    needs: publish-helm-chart
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
-      - name: Update Chart version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version:.*/version: ${VERSION}/" chart/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" chart/Chart.yaml
-
-      - name: Sync chart to helm-repository
-        uses: nebari-dev/helm-repository/.github/actions/sync-chart@main
-        with:
-          chart-path: chart
-          chart-name: provenance-collector
-          token: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}
-
-  # Keep the version-bearing files on main in sync with the released version:
-  # chart/Chart.yaml (so browsing the repo shows what consumers actually get)
-  # and examples/*.yaml (so users who copy them aren't pinned to a stale chart
-  # revision). Runs after the chart is published; commits the rewritten files
-  # back to main with [skip ci] so the bump doesn't trigger another release.
-  # Finally moves the release tag onto the stamp commit, since the tag was cut
-  # before the stamp existed and would otherwise carry the previous version.
-  stamp-version:
-    name: Stamp release version onto main
-    runs-on: ubuntu-latest
-    needs: publish-helm-chart
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Stamp files with release version
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          VERSION="${TAG#v}"
-          echo "Stamping to ${VERSION}"
-          # Chart version and appVersion. Mirrors the sed in publish-helm-chart
-          # and sync-helm-repository, which stamp their own ephemeral checkouts.
-          sed -i -E "s|^version:.*|version: ${VERSION}|" chart/Chart.yaml
-          sed -i -E "s|^appVersion:.*|appVersion: \"${VERSION}\"|" chart/Chart.yaml
-          # ArgoCD Application targetRevision (the existing case today).
-          sed -i -E "s|^(\s*targetRevision:\s*)\"[^\"]*\"(.*)|\1\"${VERSION}\"\2|" examples/*.yaml || true
-          # Quoted `tag: "..."` lines anywhere under examples/ — covers any
-          # future helm.valuesObject.image.tag we add. Greedy on purpose:
-          # examples/ only holds files we control, and no existing key
-          # collision exists (only chart releases would land a `tag:` line
-          # at any indent today).
-          sed -i -E "s|^(\s+tag:\s*)\"[^\"]*\"(.*)|\1\"${VERSION}\"\2|" examples/*.yaml || true
-          echo "--- diff ---"
-          git diff chart/Chart.yaml examples/ || true
-
-      - name: Commit and push to main
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if git diff --quiet chart/Chart.yaml examples/; then
-            echo "Nothing needed updating."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add chart/Chart.yaml examples/
-          git commit -m "chore: stamp version to ${TAG} [skip ci]"
-          git push
-          # The release tag was cut from main before this commit existed, so
-          # its tree still carries the previous version. Move it onto the
-          # stamp commit so the tag (and the release's source archives) shows
-          # the released version — but only when the tag is this commit's
-          # direct parent, so the tag can never pick up unrelated commits
-          # that landed on main in the meantime.
-          git fetch origin "refs/tags/${TAG}" --no-tags
-          if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$(git rev-parse HEAD^)" ]; then
-            git tag -f "${TAG}" HEAD
-            git push --force origin "refs/tags/${TAG}"
-            echo "Moved ${TAG} to $(git rev-parse HEAD)."
-          else
-            echo "::warning::main moved past ${TAG} before stamping; leaving the tag where it is."
-          fi
+  release:
+    uses: nebari-dev/.github/.github/workflows/pack-release.yaml@v1
+    with:
+      chart-path: chart
+      chart-name: nebari-security-posture-pack
+      tag-paths: |
+        images.api.tag
+        images.worker.tag
+        images.ui.tag
+    secrets:
+      NEBARI_HELM_REPO_TOKEN: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}

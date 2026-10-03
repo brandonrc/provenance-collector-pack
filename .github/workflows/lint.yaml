@@ -7,80 +7,65 @@ on:
     branches: [main]
 
 jobs:
-  go-lint:
+  chart:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.11.4
-        env:
-          GOTOOLCHAIN: auto
-
-      # configspec drift guards. checkenvs fails if any os.Getenv (or a name
-      # passed to one of the config helpers) references a PROVENANCE_* /
-      # KUBECONFIG name that isn't in internal/configspec.Vars. gendocs --check
-      # fails if docs/configuration.md is stale relative to the spec. Together
-      # they keep the docs and the code from drifting.
-      - name: Verify configspec coverage
-        run: go run ./hack/checkenvs
-
-      - name: Verify docs/configuration.md is up to date
-        run: go run ./hack/gendocs --check
-
-  helm-lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v5
 
       - name: Set up Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        uses: azure/setup-helm@v5
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | \
+            sudo tar -xz -C /usr/local/bin kubeconform
+
+      - name: Build chart dependencies
+        run: helm dependency build chart/
 
       - name: Lint chart
         run: helm lint chart/
 
-      # frontend.enabled defaults to true and requires frontend.keycloak.url, so
-      # the render/validate steps below supply it. The webUI.enabled=false case
-      # also disables the frontend (its /api proxy target), so no url is needed.
-      - name: Template chart (default values)
-        run: helm template test chart/ --set nebariapp.enabled=false --set frontend.keycloak.url=https://keycloak.test.example.com
+      - name: Lint chart (grace values)
+        run: helm lint chart/ -f deploy/grace/values.yaml
 
-      - name: Template chart (NebariApp enabled)
-        run: helm template test chart/ --set nebariapp.enabled=true --set nebariapp.hostname=test.example.com --set frontend.keycloak.url=https://keycloak.test.example.com
-
-      - name: Install kubeconform
+      - name: Template (NebariApp disabled, defaults)
         run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
-            | tar xz -C /usr/local/bin kubeconform
+          helm template test chart/ --set nebariapp.enabled=false > /tmp/disabled.yaml
+          kubeconform -strict -ignore-missing-schemas -summary /tmp/disabled.yaml
 
-      - name: Schema validation
+      - name: Template (NebariApp enabled)
         run: |
-          helm template test chart/ --set nebariapp.enabled=false --set webUI.enabled=false \
-            | kubeconform -strict -ignore-missing-schemas -summary
-          helm template test chart/ --set webUI.enabled=true --set frontend.keycloak.url=https://keycloak.test.example.com \
+          helm template test chart/ --set nebariapp.enabled=true \
+            --set nebariapp.hostname=test.example.com > /tmp/enabled.yaml
+          grep -q 'kind: NebariApp' /tmp/enabled.yaml
+          kubeconform -strict -ignore-missing-schemas -summary /tmp/enabled.yaml
+
+      - name: Template (chart-rendered SecurityPolicy)
+        run: |
+          helm template test chart/ --set nebariapp.enabled=true \
+            --set nebariapp.hostname=test.example.com \
+            --set adminGate.securityPolicy.enabled=true > /tmp/sp.yaml
+          grep -q 'kind: SecurityPolicy' /tmp/sp.yaml
+          grep -q 'enforceAtGateway: false' /tmp/sp.yaml
+          kubeconform -strict -ignore-missing-schemas -summary /tmp/sp.yaml
+
+      - name: Template (external database, no bundled scanners)
+        run: |
+          helm template test chart/ --set postgresql.enabled=false \
+            --set externalDatabase.host=db.example.com \
+            --set externalDatabase.existingSecret=db-creds \
+            --set scanner.clair.enabled=false --set scanner.trivy.enabled=false \
             | kubeconform -strict -ignore-missing-schemas -summary
 
-  frontend-lint:
+      - name: Template (grace values)
+        run: |
+          helm template security-posture chart/ -n security-posture \
+            -f deploy/grace/values.yaml | kubeconform -strict -ignore-missing-schemas -summary
+
+  shell:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
-        with:
-          node-version-file: frontend/.node-version
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - run: npm ci
-
-      - name: Biome check
-        run: npm run check
+      - uses: actions/checkout@v5
+      - name: shellcheck deploy scripts
+        run: shellcheck deploy/grace/*.sh

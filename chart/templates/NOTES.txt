@@ -1,37 +1,43 @@
-Provenance Collector has been deployed!
+{{ include "security-posture.fullname" . }} (Security Posture pack {{ .Chart.AppVersion }}) has been deployed to namespace {{ .Release.Namespace }}.
 
-Storage mode: {{ .Values.persistence.mode }}
-Schedule:     {{ .Values.schedule }}
+Components: ui, api, worker{{ if .Values.scanner.trivy.enabled }}, trivy{{ end }}{{ if .Values.scanner.clair.enabled }}, clair{{ end }}{{ if .Values.postgresql.enabled }}, postgres{{ end }}
+Enabled scanners: {{ include "security-posture.enabledScanners" . }}
+Admin groups:     {{ include "security-posture.adminGroups" . }}
 
-To trigger a collection immediately:
+{{- if .Values.nebariapp.enabled }}
 
-  kubectl create job --from=cronjob/{{ include "provenance-collector.fullname" . }} \
-    manual-run -n {{ .Release.Namespace }}
+NebariApp is ENABLED. The nebari-operator will create the HTTPRoute, TLS
+certificate and Keycloak client for:
+  https://{{ tpl .Values.nebariapp.hostname . | trimAll "\"" }}
 
-To view the latest report:
-{{- if eq .Values.persistence.mode "http" }}
+IMPORTANT: the namespace must carry the label nebari.dev/managed=true or the
+operator silently ignores the NebariApp:
+  kubectl label namespace {{ .Release.Namespace }} nebari.dev/managed=true --overwrite
 
-  # Port-forward the dashboard, then open http://localhost:{{ .Values.webUI.port }}
-  kubectl port-forward -n {{ .Release.Namespace }} \
-    svc/{{ include "provenance-collector.fullname" . }}-web {{ .Values.webUI.port }}:{{ .Values.webUI.port }}
+Check status (expect Ready, AuthReady, RoutingReady):
+  kubectl get nebariapp {{ include "security-posture.fullname" . }} -n {{ .Release.Namespace }} -o wide
+{{- if .Values.adminGate.securityPolicy.enabled }}
 
-  # In another shell, hit the read API:
-  curl -s http://localhost:{{ .Values.webUI.port }}/api/reports/latest | jq .
+Admin gate: chart-rendered SecurityPolicy {{ include "security-posture.fullname" . }}-admin-gate
+(enforceAtGateway rendered false on the NebariApp).
+{{- end }}
+{{- else }}
 
-  Collector uploads land at:
-    POST http://{{ include "provenance-collector.fullname" . }}-web-internal.{{ .Release.Namespace }}.svc:{{ .Values.webUI.internalPort }}/internal/reports
-  Keep that Service unexposed. Add a NetworkPolicy to restrict it to the
-  collector ServiceAccount if your cluster supports it.
-{{- else if eq .Values.persistence.mode "pvc" }}
+NebariApp is DISABLED. To reach the UI locally:
+  kubectl port-forward svc/{{ include "security-posture.componentName" (dict "ctx" . "component" "ui") }} 8080:{{ .Values.ui.service.port }} -n {{ .Release.Namespace }}
+  open http://localhost:8080
+{{- if eq .Values.auth.mode "oidc" }}
+The API requires a Keycloak token with an admin group; without the gateway
+there is no NebariIdToken cookie. For local development only, set
+auth.mode=disabled.
+{{- end }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.issuers) }}
 
-  # storageClass: {{ .Values.persistence.storageClass }} (must be ReadWriteMany-capable
-  # unless collector and dashboard pods always co-schedule).
-  POD=$(kubectl get pods -n {{ .Release.Namespace }} \
-    -l app.kubernetes.io/name={{ include "provenance-collector.name" . }} \
-    --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
-  kubectl exec -n {{ .Release.Namespace }} $POD -- cat {{ .Values.config.reportPath }}/provenance-latest.json | jq .
-{{- else if eq .Values.persistence.mode "configmap" }}
+WARNING: auth.issuers is empty - the API will reject every token. Set it to
+the Keycloak realm issuer URL(s) (internal and external).
+{{- end }}
+{{- if eq .Values.auth.mode "disabled" }}
 
-  kubectl get configmap {{ .Values.config.reportConfigMap }} \
-    -n {{ .Release.Namespace }} -o jsonpath='{.data.report\.json}' | jq .
+WARNING: auth.mode=disabled - the API performs NO authentication. Development only.
 {{- end }}

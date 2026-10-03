@@ -1,0 +1,135 @@
+# Grace (single-node MicroK8s) overrides for nebari-security-posture-pack.
+# Used by deploy/grace/deploy.sh, which also --set's the image tags to the
+# tag produced by build-push.sh.
+
+images:
+  api:
+    repository: localhost:32000/security-posture-api
+    tag: dev
+    pullPolicy: Always
+  worker:
+    repository: localhost:32000/security-posture-worker
+    tag: dev
+    pullPolicy: Always
+  ui:
+    repository: localhost:32000/security-posture-ui
+    tag: dev
+    pullPolicy: Always
+
+# Exists in grace's `nebari` realm; grace's operator emits groups without
+# the leading "/".
+adminGroups:
+  - admin
+
+auth:
+  mode: oidc
+  jwksUrl: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs
+  issuers:
+    - https://grace.possum-fujita.ts.net:8443/auth/realms/nebari
+    - http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+    - http://keycloak.100-89-230-107.sslip.io/auth/realms/nebari
+
+scanner:
+  # grace has 40 cores and is mostly idle.
+  parallelism: 6
+  mirror:
+    enabled: true
+    registry: registry.container-registry.svc.cluster.local:5000
+    insecure: true
+    rewrite:
+      "localhost:32000": registry.container-registry.svc.cluster.local:5000
+
+# grype/trivy/skopeo on multi-GB images (ray, jupyter) need ~2Gi per parallel
+# image; 6Gi OOMKilled the worker at parallelism 6.
+worker:
+  resources:
+    # grace's memory requests are ~98% allocated: keep the request small.
+    requests: { cpu: "1", memory: 1Gi }
+    limits: { cpu: "8", memory: 16Gi }
+
+# Report generation runs in the api process (BackgroundTask). With scan #5's
+# ~25k consensus findings, nine concurrent reports OOMKilled the api at 1Gi.
+api:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 4Gi }
+
+# Clair OOMKilled at 4Gi while its updaters ingested RHEL/Debian data and the
+# indexer unpacked large images concurrently.
+clair:
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "4", memory: 8Gi }
+
+persistence:
+  storageClass: microk8s-hostpath
+
+networkPolicy:
+  enabled: true
+  gatewayNamespaces:
+    - envoy-gateway-system
+  # Landing-page health prober / operator, which call the ui directly.
+  uiAllowedNamespaces:
+    - nebari-landing
+    - nebari-operator-system
+
+# Grace's operator enforces auth.groups at the gateway, so the chart's own
+# SecurityPolicy stays off here (layer 1 + layer 3).
+adminGate:
+  securityPolicy:
+    enabled: false
+    externalIssuer: https://grace.possum-fujita.ts.net:8443/auth/realms/nebari
+
+nebariapp:
+  enabled: true
+  hostname: security.100-89-230-107.sslip.io
+
+# Generate every compliance report after each completed scan (grace demo).
+reports:
+  autoGenerate: [poam, stig-checklist, sar, oscal-ar, inventory, vuln-export]
+
+# The nebari CA (cert-manager ClusterIssuer nebari-ca-issuer -> nebari-ca-secret,
+# CN=nebari-dev-ca) signs artifacts.100-89-230-107.sslip.io. Created by
+# deploy.sh from cert-manager/nebari-ca-secret (key ca.crt only).
+extraCACerts:
+  secretName: nebari-ca
+
+# Supply-chain provenance (DESIGN §12, docs/PROVENANCE.md).
+provenance:
+  enabled: true
+  verifySignatures: true
+  checkSBOM: true
+  checkProvenance: true
+  checkUpdates: true
+  cosign:
+    # Keyless (Fulcio/Rekor): Kubernetes release images. Other keyless or
+    # key-signed images show as signed-but-unverified.
+    certificateIdentityRegexp: '^krel-trust@k8s-releng-prod\.iam\.gserviceaccount\.com$'
+    certificateOidcIssuerRegexp: '^https://accounts\.google\.com$'
+  helmReleases:
+    enabled: true
+  compat:
+    internalService:
+      enabled: true
+      allowedNamespaces:
+        - monitoring
+        - observability
+
+# Control evidence engine (DESIGN §13, docs/CONTROLS.md).
+controlsEngine:
+  enabled: true
+  baseline: moderate
+  # `admin` is the one approved holder of the nebari realm-admin role.
+  adminSubjectsAllowlist: [admin]
+  keycloak:
+    url: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth
+    realm: nebari
+    # Master-realm super-admin credentials; adminRealm "" tries nebari, then master.
+    adminSecret:
+      name: nebari-realm-admin-credentials
+      namespace: keycloak
+  # observability holds the kube-prometheus-stack Alertmanager and the Loki
+  # promtail ships to; monitoring's lgtm-pack has no Alertmanager.
+  lokiUrl: http://loki.observability.svc.cluster.local:3100
+  prometheusUrl: http://kube-prom-stack-kube-prome-prometheus.observability.svc.cluster.local:9090
+  alertmanagerUrl: http://kube-prom-stack-kube-prome-alertmanager.observability.svc.cluster.local:9093
