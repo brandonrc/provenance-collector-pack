@@ -1,173 +1,134 @@
 ---
 title: Quick Start
-description: Install the Provenance Collector, trigger a scan, and view your first provenance report.
+description: Install the Security Posture pack, run the first scan, and point Grafana at the provenance report.
 ---
 
-The Provenance Collector is normally installed by the
-[Nebari Operator](https://github.com/nebari-dev/nebari-operator) as part of
-NIC's foundational software — you don't run any `helm` commands yourself, the
-operator and ArgoCD do it for you. The operator-managed path is the supported
-default; the standalone install below exists for vanilla Kubernetes clusters
-and local development.
+On a Nebari (NIC) cluster the pack is installed through ArgoCD like every other
+software pack; a standalone install works on any Kubernetes cluster for
+evaluation and development.
 
-## Operator-managed install (default)
+## Requirements
 
-A complete ArgoCD `Application` manifest lives at
+| | Minimum | Notes |
+|---|---|---|
+| Kubernetes | 1.26+ | |
+| `helm` | 3.14+ | The chart depends on the `nebari-app` library chart (`helm dependency build`). |
+| Permissions | `cluster-admin` to install | The chart creates read-only ClusterRoles for the api/worker ServiceAccount. |
+| Capacity | ~4 CPU / 8 GiB free, ~45 GiB storage | Worker (grype + trivy client + skopeo + collector), Clair, Trivy server, Postgres. See [Storage](/storage-modes/). |
+| Nebari | nebari-operator, Envoy Gateway, Keycloak | Only with `nebariapp.enabled: true`. |
+
+## Nebari install (operator-managed)
+
+A complete ArgoCD `Application` lives at
 [`examples/argocd-application.yaml`](https://github.com/nebari-dev/provenance-collector-pack/blob/main/examples/argocd-application.yaml)
-and is auto-stamped to the latest released chart version on every release.
-Apply it from your gitops repo or directly:
+and [`examples/nebari-values.yaml`](https://github.com/nebari-dev/provenance-collector-pack/blob/main/examples/nebari-values.yaml)
+holds the same values for a plain `helm install`. The namespace must carry the
+label `nebari.dev/managed=true`, otherwise the operator ignores the `NebariApp`:
 
 ```bash
-kubectl apply -f examples/argocd-application.yaml
+kubectl create namespace provenance-system
+kubectl label namespace provenance-system nebari.dev/managed=true
+
+helm dependency build chart/
+helm install provenance-collector chart/ \
+  -n provenance-system \
+  -f examples/nebari-values.yaml \
+  --set nebariapp.hostname=security.<your-domain> \
+  --set 'auth.issuers={https://keycloak.<your-domain>/auth/realms/nebari,http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari}'
 ```
 
 The values most users adjust:
 
 ```yaml
 nebariapp:
-  enabled: true                       # register the pack with the Nebari Operator
-  hostname: provenance.<your-domain>  # public URL the UI responds on
-
-webUI:
-  enabled: true                       # dashboard API + report-upload endpoint; required when persistence.mode=http
-  features:
-    timelineDeltas: false             # opt-in; show +N/-N badges between scans
-
-frontend:
-  enabled: true                       # standalone React UI (nginx); serves the SPA and proxies /api to the dashboard
-  keycloak:
-    url: https://keycloak.<your-domain>  # required when frontend.enabled: the browser keycloak-js (PKCE) login endpoint
+  enabled: true
+  hostname: security.<your-domain>   # public URL of the UI
+adminGroups: [admin]                 # Keycloak groups allowed in (gateway + API)
+auth:
+  issuers: [...]                     # accepted token issuers; empty = every token rejected
+scanner:
+  intervalHours: 6                   # scheduled scans (was `schedule:` in 0.1.x)
+provenance:
+  helmReleases:
+    enabled: true                    # Helm release discovery (cluster-wide Secrets get/list)
+  compat:
+    internalService:
+      enabled: true                  # unauthenticated /api/reports* for Grafana
 ```
 
-Setting `nebariapp.enabled: true` renders a `NebariApp` custom resource that
-registers the pack with the Nebari Operator. The operator wires up routing,
-provisions a public Keycloak SPA client, and registers the landing page so the
-UI is reachable through the Nebari gateway under `https://<hostname>` and
-surfaced on the [Nebari Landing page](https://github.com/nebari-dev/nebari-landing).
-The React SPA performs the OIDC login in the browser via `keycloak-js` (PKCE);
-the gateway does not enforce auth (`nebariapp.auth.enforceAtGateway: false`).
-Leave `nebariapp.enabled: false` for clusters that aren't running the operator.
-Full field reference: [NebariApp CRD](/nebariapp-crd-reference/).
-
-Verify:
+Check the deployment:
 
 ```bash
-# Application picked up by ArgoCD
-kubectl get application provenance-collector -n argocd
-
-# Chart unpacked: CronJob + dashboard pods exist in the target namespace
-kubectl get cronjob -n provenance-system
-kubectl get pods -n provenance-system -l app.kubernetes.io/name=provenance-collector
+kubectl get nebariapp -n provenance-system -o wide   # expect Ready, AuthReady, RoutingReady
+kubectl get pods -n provenance-system                # api, worker, ui, postgres, trivy, clair
 ```
 
-## Standalone install (without the Nebari Operator)
+Then open `https://security.<your-domain>`. Members of `adminGroups` see the
+Overview; everybody else is stopped by the gateway (or gets the API's 403 page).
+Upgrading an existing 0.1.x install: read [Migrating from 0.1.x](/migrating/) first.
+
+## Standalone install
+
+Use [`examples/standalone-values.yaml`](https://github.com/nebari-dev/provenance-collector-pack/blob/main/examples/standalone-values.yaml):
+no operator, no gateway, no Keycloak.
 
 :::caution
-Use this path only on a vanilla Kubernetes cluster *without* NIC. Without the
-operator you're responsible for routing and OIDC yourself if you want the
-dashboard reachable from outside the cluster.
+The standalone example sets `auth.mode: disabled`: the API performs **no
+authentication** and anyone who reaches the ui Service is an admin. Keep it on a
+trusted network, or front it with your own authenticating proxy and use
+`auth.mode: oidc`.
 :::
 
-### Prerequisites
-
-| Tool | Minimum version | Notes |
-| --- | --- | --- |
-| `kubectl` | 1.26+ | Cluster interaction |
-| `helm` | 3.14+ | Chart install |
-| Kubernetes cluster | 1.26+ | Local (kind / k3d / minikube) or remote |
-| Cluster permissions | `cluster-admin` | Chart creates a `ClusterRole` + `ClusterRoleBinding` |
-
-If you want `nebariapp.enabled: true` on a standalone cluster, the Nebari
-Operator CRDs must still be installed first — see the
-[NebariApp CRD reference](/nebariapp-crd-reference/). Most standalone installs
-leave `nebariapp.enabled: false` and hit the dashboard's JSON API via
-`kubectl port-forward` (the browser UI is the separate `frontend` container —
-see [Web Dashboard](/web-dashboard/)).
-
-### Install
-
 ```bash
-helm repo add nebari https://nebari-dev.github.io/helm-repository
-helm repo update
+helm dependency build chart/
+helm install provenance-collector chart/ \
+  -n provenance-system --create-namespace \
+  -f examples/standalone-values.yaml
 
-helm install provenance-collector nebari/provenance-collector \
-  --namespace provenance-system \
-  --create-namespace
+kubectl port-forward -n provenance-system svc/provenance-collector-ui 8080:80
+open http://localhost:8080
 ```
 
-Or install from a local checkout when iterating on the chart:
+## The first scan
+
+The worker scans on start-up and then every `scanner.intervalHours`. To scan now,
+use **Scan now** in the UI (Scans page), or the API:
 
 ```bash
-helm install provenance-collector ./chart \
-  --namespace provenance-system \
-  --create-namespace
+# through the gateway, with an admin token
+curl -X POST https://security.<your-domain>/api/v1/scans \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"force": true}'
 ```
 
-### Verify
+The first scan takes longer than later ones: the worker downloads the grype
+database, Trivy and Clair fill their vulnerability databases, and every image is
+mirrored once. The scan log (Scans page) shows each stage, including the
+provenance engine line:
 
-```bash
-kubectl get cronjob -n provenance-system
-kubectl get pods -n provenance-system -l app.kubernetes.io/name=provenance-collector
+```
+provenance engine=collector (0.2.0): 74 report record(s) -> 61 image(s) ingested ...
 ```
 
-### Trigger a manual run
+## Grafana
 
-Two options:
+With `provenance.compat.internalService.enabled: true`, the provenance report is
+served without auth on an in-cluster Service that only the namespaces in
+`allowedNamespaces` can reach. Import
+[`examples/grafana-dashboard.json`](https://github.com/nebari-dev/provenance-collector-pack/blob/main/examples/grafana-dashboard.json)
+(Infinity datasource); its URL is
 
-1. **From the dashboard** — click the `Run Scan` button next to the timeline.
-   The button only renders for users whose OIDC groups intersect with
-   `webUI.adminGroups`, so it's hidden by default until you wire up
-   `webUI.oidcIssuer` and at least one admin group. Under operator-managed
-   installs (`nebariapp.enabled: true`) this is handled automatically — the
-   operator routes through Keycloak with the groups in `nebariapp.auth.groups`.
-2. **With `kubectl`** — fall back to creating a Job from the CronJob directly:
-
-```bash
-kubectl create job --from=cronjob/provenance-collector \
-  manual-run -n provenance-system
-
-kubectl wait --for=condition=complete job/manual-run \
-  -n provenance-system --timeout=5m
+```
+http://<release>-web-internal.<namespace>.svc:8080/api/reports/latest
+# e.g. http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest
 ```
 
-Either path creates a one-shot Job from the same CronJob template, so the
-resulting report is identical. Manual Jobs are auto-cleaned after
-`webUI.manualJobTTL` (default 1h); the kubectl-created Job above has no TTL
-and persists until you delete it.
-
-### View the report
-
-```bash
-# Default (persistence.mode=http) — the dashboard exposes the JSON API (it is
-# API-only; the browser UI is the separate frontend container).
-kubectl port-forward -n provenance-system \
-  svc/provenance-collector-web 8080:8080
-
-# In another shell, fetch the latest JSON:
-curl -s http://localhost:8080/api/reports/latest | jq .
-
-# persistence.mode=configmap — no dashboard required.
-kubectl get configmap provenance-report \
-  -n provenance-system \
-  -o jsonpath='{.data.report\.json}' | jq .
-```
-
-To open the browser UI, use the Nebari gateway (`nebariapp.enabled: true`, at
-`https://<hostname>`) or run it locally against the port-forwarded API — see
-[Web Dashboard](/web-dashboard/). The report's JSON structure is documented in
-the [Report Schema reference](/report-schema/).
-
-### Uninstall
+## Uninstall
 
 ```bash
 helm uninstall provenance-collector -n provenance-system
-
-# Also remove the namespace (and any PVC-stored reports):
-kubectl delete namespace provenance-system
 ```
 
-## Next steps
-
-- [Architecture](/architecture/) — how the pieces fit together.
-- [Storage Modes](/storage-modes/) — choosing between `http`, `pvc`, and `configmap`.
-- [Configuration](/configuration/) — every environment variable and chart value.
+The worker, Trivy and reports PVCs are part of the release and are deleted with
+it. The Postgres StatefulSet's PVC (`data-<fullname>-postgres-0`) and the generated
+database password Secret (`helm.sh/resource-policy: keep`) survive; delete them
+by hand for a clean slate.

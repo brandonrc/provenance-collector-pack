@@ -1,47 +1,81 @@
 ---
 title: NebariApp CRD Reference
-description: Field-by-field reference for the NebariApp custom resource used for Nebari Operator integration.
+description: The NebariApp custom resource the chart renders, how chart values map onto it, and the operator's field reference.
 ---
 
-Complete field-by-field reference for the NebariApp custom resource.
+With `nebariapp.enabled: true` the chart renders one `NebariApp`
+(`reconcilers.nebari.dev/v1`) through the `nebari-app` library chart. The
+nebari-operator turns it into an HTTPRoute on the shared gateway, a cert-manager
+Certificate, a Keycloak client (Secret `<fullname>-oidc-client`) and, with gateway
+enforcement, an Envoy `SecurityPolicy`. The landing page tile comes from
+`landingPage`.
 
-**API Version:** `reconcilers.nebari.dev/v1`
-**Kind:** `NebariApp`
-**Source:** [nebari-operator/api/v1/nebariapp_types.go](https://github.com/nebari-dev/nebari-operator/blob/main/api/v1/nebariapp_types.go)
+## What the chart renders
 
-## Full Example
+`helm template provenance-collector chart/ -n provenance-system -f examples/nebari-values.yaml`:
 
 ```yaml
 apiVersion: reconcilers.nebari.dev/v1
 kind: NebariApp
 metadata:
-  name: my-pack
-  namespace: my-pack
+  name: provenance-collector          # <fullname>
+  namespace: provenance-system
 spec:
-  hostname: my-pack.nebari.example.com
+  hostname: provenance.example.com    # nebariapp.hostname (required)
   service:
-    name: my-pack
-    port: 80
+    name: provenance-collector-ui     # the ui Service (nginx)
+    port: 80                          # ui.service.port
   routing:
     routes:
       - pathPrefix: /
         pathType: PathPrefix
+    publicRoutes:                     # reachable without login
+      - pathPrefix: /healthz          # landing-page health check
+        pathType: Exact
+      - pathPrefix: /icon.svg         # landing-page tile icon
+        pathType: Exact
     tls:
       enabled: true
   auth:
     enabled: true
     provider: keycloak
     provisionClient: true
-    enforceAtGateway: true
-    redirectURI: /
-    scopes:
-      - openid
-      - profile
-      - email
-    groups:
-      - admin
+    enforceAtGateway: true            # false when adminGate.securityPolicy.enabled
+    forwardAccessToken: true          # the api verifies the JWT itself
+    redirectURI: /oauth2/callback
+    scopes: [openid, profile, email, groups]
+    groups: [admin]                   # = adminGroups
   gateway: public
+  landingPage:
+    enabled: true
+    displayName: Security Posture
+    description: Container vulnerability & configuration posture across the cluster
+    icon: https://provenance.example.com/icon.svg
+    category: Platform
+    priority: 20
+    healthCheck: { enabled: true, path: /healthz, intervalSeconds: 30, timeoutSeconds: 5 }
 ```
+
+Every field comes from `nebariapp.*` in `values.yaml`; string values containing
+`{{` are templated (for example `groups: '{{ .Values.adminGroups | toJson }}'`).
+
+## The admin gate
+
+The pack is admin-only, enforced in up to three layers:
+
+1. **Gateway, via the NebariApp.** `auth.groups` = `adminGroups`. Operators that
+   enforce groups at the gateway reject everybody else before the request reaches
+   the pack.
+2. **Gateway, via the chart's own SecurityPolicy** (`adminGate.securityPolicy.enabled`).
+   For operator versions that use `auth.groups` only for landing-page visibility:
+   the chart renders an Envoy `SecurityPolicy` (OIDC + JWT + authorization
+   default deny, allow on the `groups` claim) on the operator's HTTPRoute and sets
+   `enforceAtGateway: false` so the route carries exactly one policy.
+3. **API.** The api verifies the token signature (JWKS), issuer (`auth.issuers`)
+   and group membership (`adminGroups`) on every request; `GET /api/v1/me`
+   answers non-admins so the UI can explain the 403.
+
+## Operator field reference
 
 ## spec
 
@@ -65,6 +99,7 @@ spec:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `routes` | [][RouteMatch](#specroutingroutes) | No | - | Path-based routing rules. If omitted, all traffic to the hostname is routed to the service. |
+| `publicRoutes` | [][RouteMatch](#specroutingroutes) | No | - | Paths served without authentication even when `auth.enforceAtGateway` is true (this chart: `/healthz`, `/icon.svg`). Requires an operator version that supports it. |
 | `tls` | [RoutingTLSConfig](#specroutingtls) | No | - | TLS certificate management configuration. |
 
 ### spec.routing.routes[]
@@ -92,7 +127,8 @@ spec:
 | `clientSecretRef` | *string | No | - | Reference to a Secret containing `client-id` and `client-secret`. If omitted and `provisionClient` is true, the operator creates `<name>-oidc-client` with keys: `client-id`, `client-secret`, and optionally `issuer-url`. |
 | `spaClient` | [SPAClientConfig](#specauthspaclient) | No | - | Provision a **public** PKCE client for a browser SPA (no client secret). Used with `enforceAtGateway: false` when a single-page app performs the OIDC login itself (e.g. via `keycloak-js`). |
 | `scopes` | []string | No | `["openid", "profile", "email"]` | OIDC scopes to request during authentication. |
-| `groups` | []string | No | - | Groups that have access. When specified, only users in these groups are authorized. Case-sensitive. |
+| `forwardAccessToken` | *bool | No | `false` | Forward the user's token to the backend (only valid with `enforceAtGateway`). This chart sets it so the API can verify the JWT. |
+| `groups` | []string | No | - | Groups that have access. When specified, only users in these groups are authorized. Case-sensitive. Some operator versions use it for landing-page visibility only; see `adminGate.securityPolicy` below. |
 | `issuerURL` | string | No | - | OIDC issuer URL. Required when `provider=generic-oidc`, ignored for `keycloak`. Example: `https://accounts.google.com`. |
 
 ### spec.auth.spaClient
@@ -102,11 +138,8 @@ spec:
 | `enabled` | bool | No | `false` | Provision a public PKCE (no-secret) client for a browser SPA. |
 | `clientId` | string | No | - | Client ID to provision. When empty, the operator generates one using the convention `<namespace>-<nebariapp-name>-spa`. The SPA must present this exact ID. |
 
-> **Provenance Collector uses this (Model B).** The chart sets `auth.enforceAtGateway: false` and
-> `auth.spaClient.enabled: true`, and the NebariApp targets the `-frontend` nginx Service. The React SPA runs the
-> OIDC login in the browser via `keycloak-js` (PKCE), and the operator provisions only the public SPA client — no
-> gateway SecurityPolicy. Keep `frontend.keycloak.clientId` (rendered into the SPA's `config.json`) in sync with
-> `spaClient.clientId`; leaving both empty makes them share the `<namespace>-<nebariapp-name>-spa` default.
+> The Security Posture pack does **not** use the SPA client: login happens at the
+> gateway (`enforceAtGateway: true`), and the API verifies the forwarded token itself.
 
 ## Status
 
@@ -143,99 +176,3 @@ kubectl label namespace my-pack nebari.dev/managed=true
 ```
 
 Without this label, the NebariApp will show `NamespaceNotOptedIn` and no resources will be created.
-
-## Deployment Patterns
-
-The NebariApp resource can be included in your pack using any deployment method.
-
-### Plain YAML
-
-The NebariApp is just another manifest file alongside your Deployment and Service:
-
-```yaml
-# nebariapp.yaml
-apiVersion: reconcilers.nebari.dev/v1
-kind: NebariApp
-metadata:
-  name: my-pack
-spec:
-  hostname: my-pack.nebari.example.com
-  service:
-    name: my-pack
-    port: 80
-```
-
-When deploying standalone (without Nebari), skip this file in your `kubectl apply`.
-
-### Kustomize
-
-Include the NebariApp in your base `kustomization.yaml` and use overlays to
-patch environment-specific values like `hostname` and `auth`:
-
-```yaml
-# overlays/production/nebariapp-patch.yaml
-apiVersion: reconcilers.nebari.dev/v1
-kind: NebariApp
-metadata:
-  name: my-pack
-spec:
-  hostname: my-pack.nebari.example.com
-  auth:
-    enabled: true
-    groups:
-      - admin
-```
-
-### Helm
-
-In Helm charts, you can make the NebariApp conditional so the chart works both
-standalone and on Nebari:
-
-```yaml
-{{- if .Values.nebariapp.enabled }}
-apiVersion: reconcilers.nebari.dev/v1
-kind: NebariApp
-metadata:
-  name: {{ include "my-pack.fullname" . }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "my-pack.labels" . | nindent 4 }}
-spec:
-  hostname: {{ required "nebariapp.hostname is required" .Values.nebariapp.hostname }}
-  service:
-    name: {{ .Values.nebariapp.service.name | default (include "my-pack.fullname" .) }}
-    port: {{ .Values.nebariapp.service.port | default 80 }}
-  {{- with .Values.nebariapp.auth }}
-  auth:
-    enabled: {{ .enabled | default false }}
-    provider: {{ .provider | default "keycloak" }}
-    provisionClient: {{ .provisionClient | default true }}
-    redirectURI: {{ .redirectURI | default "/" }}
-    {{- with .scopes }}
-    scopes:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-  {{- end }}
-{{- end }}
-```
-
-The corresponding `values.yaml` section:
-
-```yaml
-nebariapp:
-  enabled: false
-  # hostname: my-pack.nebari.example.com  # Required when enabled
-  service:
-    name: ""   # Defaults to release fullname
-    port: 80
-  auth:
-    enabled: false
-    provider: keycloak
-    provisionClient: true
-    redirectURI: /
-    scopes:
-      - openid
-      - profile
-      - email
-  gateway: public
-```

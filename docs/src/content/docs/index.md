@@ -1,48 +1,72 @@
 ---
-title: Provenance Collector
-description: Compliance-grade supply-chain provenance for every container image and Helm release running on a Nebari cluster.
+title: Security Posture
+description: Admin-only security posture for Nebari clusters - supply-chain provenance, three-scanner vulnerability consensus, STIG posture checks, live NIST SP 800-53 control evidence and compliance reports.
 ---
 
-The Provenance Collector is a **Nebari Software Pack** that produces
-compliance-grade supply-chain reports for every container image and Helm
-release running on a Kubernetes cluster. It is deployed by the
-[Nebari Operator](https://github.com/nebari-dev/nebari-operator) as part of
-Nebari Infrastructure Core (NIC), runs on a schedule as a `CronJob`, and ships
-each timestamped JSON report to a web dashboard, a shared PVC, or a ConfigMap.
+The **Security Posture pack** (repository `provenance-collector-pack`, Helm
+chart `provenance-collector`) answers the full compliance question for a Nebari
+cluster:
 
-It exists because answering *"what is actually running on this cluster, where
-did it come from, and is it signed?"* should not require manual auditing.
+- **Where did every running image come from?** Supply-chain provenance:
+  digests, cosign signatures, SBOM and SLSA provenance attestations, available
+  updates and Helm releases. The **Go provenance collector** is the provenance
+  engine: the worker runs it once per scan and ingests its report.
+- **What is wrong with it?** Every image is mirrored once and scanned by
+  **Trivy, Grype and Clair**; findings are correlated into a consensus with an
+  agreement level per CVE.
+- **How is it run?** 16 workload posture checks mapped to the **Kubernetes STIG**
+  and the Container Platform SRG.
+- **Which controls does the platform implement and prove?** A **NIST SP 800-53
+  rev5 control evidence engine** runs live assertions against Keycloak, the
+  gateway, cert-manager, Kubernetes RBAC, logging and monitoring.
+
+Everything rolls up into a 0-100 score and an A-F grade per image, workload,
+namespace and cluster, and into compliance reports: POA&M, STIG checklists
+(CKL/CKLB), a Security Assessment Report (PDF), OSCAL assessment results, SSP
+and component definition, inventory and vulnerability exports.
+
+It was formed by merging `nebari-security-posture-pack` into
+`provenance-collector-pack` ([proposal 0001](/proposals/0001-merge/)). The
+provenance report API (`/api/reports/latest` and friends) and the Grafana
+Infinity dashboard keep working.
 
 ## What it does
 
 | Capability | Description |
 |---|---|
-| **Image discovery** | Scans all pods across namespaces, deduplicates by workload owner |
-| **Digest resolution** | Resolves every image tag to its immutable SHA256 digest |
-| **Signature verification** | Checks for cosign signatures (existence or key-based verification) |
-| **SLSA provenance** | Detects SLSA provenance attestations via the OCI referrers API |
-| **SBOM detection** | Detects attached SPDX / CycloneDX attestations |
-| **Update checking** | Compares running tags against the latest semver tags |
-| **Helm release tracking** | Discovers all deployed Helm releases with chart versions |
-| **Web dashboard** | Optional UI with filters, sorting, and an image detail panel |
-| **Grafana integration** | JSON API compatible with the Infinity datasource |
+| **Inventory** | Every running container by digest, with its owning controller and NebariApp |
+| **Provenance** | Signatures (key, keyless), SBOM and SLSA attestations, update checks, Helm releases ([details](/provenance/)) |
+| **Vulnerability consensus** | Trivy + Grype + Clair on identical mirrored bytes, agreement 1/3, 2/3, 3/3 |
+| **Posture checks** | Privileged, root, capabilities, host namespaces, hostPath, seccomp, limits, probes, mutable tags, SA tokens, NetworkPolicy |
+| **Control evidence** | 35 live assertions, control status per baseline (LOW / MODERATE / HIGH) ([details](/controls/)) |
+| **Reports** | POA&M (eMASS layout), STIG CKL/CKLB, SAR PDF, OSCAL AR / SSP / component definition, CycloneDX VEX ([details](/reports/)) |
+| **Web UI** | Admin-only nebari-design UI behind the Nebari gateway ([Web UI](/web-dashboard/)) |
+| **Grafana** | The provenance report JSON API on an unauthenticated in-cluster Service for the Infinity datasource |
 
 ## Guides
 
-- [Quick Start](/quick-start/) — install the collector and view your first report.
-- [Architecture](/architecture/) — how the collector, dashboard, and frontend fit together.
-- [Storage Modes](/storage-modes/) — choosing between `http`, `pvc`, and `configmap`.
-- [Web Dashboard](/web-dashboard/) — the UI, its JSON API, and Grafana integration.
+- [Quick Start](/quick-start/) - install the pack and run your first scan.
+- [Migrating from 0.1.x](/migrating/) - upgrading from the provenance-collector-only chart.
+- [Architecture](/architecture/) - the runtime components and how a scan flows.
+- [Web UI](/web-dashboard/) - the pages, the auth model, the JSON APIs and Grafana.
+- [Storage](/storage-modes/) - Postgres and the PVCs.
+
+## Compliance
+
+- [Compliance architecture](/compliance-architecture/) - from container scans to an 800-53 control picture.
+- [Controls](/controls/), [Reports](/reports/), [Supply-chain provenance](/provenance/), [Scoring](/scoring/).
 
 ## Reference
 
-- [Configuration](/configuration/) — every environment variable and its chart value.
-- [Report Schema](/report-schema/) — the JSON output structure.
-- [NebariApp CRD](/nebariapp-crd-reference/) — operator integration fields.
+- [Configuration](/configuration/) - chart values, including the 0.1.x compatibility keys.
+- [Collector environment](/collector-environment/) - environment variables of the Go collector binary.
+- [Report Schema](/report-schema/) - the provenance report JSON.
+- [NebariApp CRD](/nebariapp-crd-reference/) - operator integration.
+- [Verifying Images](/verifying-images/) - cosign verification of the published images.
 
-> **Status:** Under active development as part of NIC. APIs, chart values, and
-> report schema may change without notice while pre-1.0.
+> **Status:** experimental. Chart values, APIs and report formats may change
+> without notice while pre-1.0.
 
-Additional deployment examples (standalone, Nebari, ArgoCD) live in the
+Deployment examples (standalone, Nebari, ArgoCD, Grafana dashboard) live in the
 [`examples/`](https://github.com/nebari-dev/provenance-collector-pack/tree/main/examples)
 directory of the repository.

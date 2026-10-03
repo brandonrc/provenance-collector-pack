@@ -50,7 +50,7 @@ The Go collector and the standalone dashboard binary are configured entirely
 via environment variables. In the pack, the security posture worker runs the
 collector once per scan (` + "`provenance-collector --once --output <file>`" + `) and sets
 these variables from the chart's ` + "`provenance.*`" + ` values (see
-[Configuration](../configuration/)); the standalone dashboard is not deployed by
+[Configuration](/configuration/)); the standalone dashboard is not deployed by
 the chart. The command-line flags ` + "`--once`" + ` and ` + "`--output <path|->`" + ` bypass
 the ` + "`PROVENANCE_REPORT_OUTPUT`" + ` sink.
 

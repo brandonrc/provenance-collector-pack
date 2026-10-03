@@ -1,9 +1,26 @@
 ---
 title: Report Schema Reference
-description: JSON structure of the provenance reports the collector emits.
+description: JSON structure of the provenance report - written by the Go collector and served by the api at /api/reports/*.
 ---
 
-The provenance collector outputs JSON reports with the following structure.
+The provenance report schema is unchanged from provenance-collector-pack 0.1.x
+(`collector/internal/report/types.go`). It appears in two places:
+
+- **The Go collector's output.** `provenance-collector --once --output -` writes one
+  report; the worker runs it every scan and ingests it
+  ([Engines](/provenance/#engines)).
+- **The compatible API.** `GET /api/reports/latest` (and `/api/reports`,
+  `/api/reports/{filename}`, `/api/export`) renders the report from the latest
+  completed scan's stored results, one report per scan
+  (`provenance-YYYYMMDD-HHMMSS.json` from the scan's finish time). Field names,
+  order, `omitempty` and formatting match the Go `json.MarshalIndent` output.
+
+Differences in what the API serves, compared with a raw collector report (details
+in [Supply-chain provenance](/provenance/#differences-from-provenance-collector-pack)):
+`workload` is the resolved controller (Deployment, CronJob) rather than the
+ReplicaSet / Job; `digest` is the digest actually running; `generatedAt` is the
+scan's finish time; `collectorVersion` carries the `+posture` suffix; Helm
+releases get `update` when `provenance.helmReleases.chartRepos` knows the chart.
 
 ## Top-Level
 
@@ -33,6 +50,7 @@ The provenance collector outputs JSON reports with the following structure.
 | `workload` | [WorkloadRef](#workloadref) | Owning workload (Deployment, StatefulSet, etc.). |
 | `signature` | [SignatureInfo](#signatureinfo) | Cosign signature status (omitted if not checked). |
 | `sbom` | [SBOMInfo](#sbominfo) | SBOM attestation status (omitted if not found). |
+| `provenance` | [ProvenanceInfo](#provenanceinfo) | SLSA provenance attestation status (omitted if not found). |
 | `update` | [UpdateInfo](#updateinfo) | Available updates (omitted if none or not checked). |
 
 ## WorkloadRef
@@ -56,6 +74,13 @@ The provenance collector outputs JSON reports with the following structure.
 |---|---|---|
 | `hasSBOM` | bool | Whether an SBOM attestation was found. |
 | `format` | string | SBOM format: `spdx`, `cyclonedx`, or empty. |
+
+## ProvenanceInfo
+
+| Field | Type | Description |
+|---|---|---|
+| `hasProvenance` | bool | Whether a SLSA / in-toto provenance attestation was found. |
+| `predicateType` | string | Predicate type, e.g. `https://slsa.dev/provenance/v0.2`. |
 
 ## UpdateInfo
 
@@ -87,6 +112,7 @@ The provenance collector outputs JSON reports with the following structure.
 | `signedImages` | int | Images with cosign signatures. |
 | `verifiedImages` | int | Images with verified signatures. |
 | `imagesWithSBOM` | int | Images with attached SBOM attestations. |
+| `imagesWithProvenance` | int | Images with SLSA provenance attestations. |
 | `imagesWithUpdates` | int | Images with newer versions available. |
 | `totalHelmReleases` | int | Total Helm releases discovered. |
 | `helmReleasesWithUpdates` | int | Helm releases with newer chart versions. |
