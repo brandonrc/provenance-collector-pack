@@ -20,7 +20,8 @@ build_push() {
   local name="$1" dockerfile="$2" context="$3"
   local ref="${REGISTRY}/security-posture-${name}:${TAG}"
   echo ">> building ${ref} (${dockerfile})" >&2
-  docker build -f "${dockerfile}" -t "${ref}" "${context}" >&2
+  # COLLECTOR_VERSION: version stamped into the Go collector bundled in the worker.
+  docker build -f "${dockerfile}" --build-arg "COLLECTOR_VERSION=${TAG}" -t "${ref}" "${context}" >&2
   echo ">> pushing ${ref}" >&2
   docker push "${ref}" >&2
 }

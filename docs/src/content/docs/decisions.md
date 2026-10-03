@@ -128,6 +128,10 @@ description: "Decisions log: deviations from and refinements of the design contr
   `collector/`). Collector RBAC needs (pods, namespaces, apps/batch owners, secrets for Helm)
   are already covered by the reader ClusterRole and the optional helm-releases ClusterRole;
   the configmaps verbs of their chart were only for their ConfigMap sink and are not added.
+- 2026-10-03 (provenance engine, grace): The first grace scan with engine=collector showed the
+  collector's update check reintroducing the bogus "newest" tags fixed in the Python check
+  (`5ac1e7f`). Image update checks therefore stay in Python under both engines; the collector runs
+  with `PROVENANCE_CHECK_UPDATES=false` (this also halves the tag-list traffic to Docker Hub).
 
 ## Grace deployment status (2026-10-03, phase 2)
 
@@ -147,7 +151,8 @@ description: "Decisions log: deviations from and refinements of the design contr
   27.7, grade F (vulnerability 8.2, configuration 74.8, supply chain 27.3 F); findings
   780 critical / 6,847 high / 12,403 medium / 3,536 low; posture checks 1,150 pass / 464 fail.
 - Provenance (scan #6): 16 signed, 5 verified (all `registry.k8s.io`), 8 with SBOM, 34 with SLSA
-  provenance, 57 with updates, 17 Helm releases (0 behind: no `chartRepos`, so "not checked"),
+  provenance, 57 with updates, 17 Helm releases (0 behind: no `chartRepos`, so "not checked";
+  `deploy/grace/values.yaml` now lists them, verified against the live repos, not deployed yet),
   6 registry errors, all Docker Hub `429` (kiwigrid/k8s-sidecar, curlimages/curl:8.9.1,
   bitnami/redis, busybox:1.36, bitnami/postgresql, aquasec/trivy:0.75.0). Docker Hub 429 also
   failed the skopeo mirror for `rayproject/ray:2.56.0` and `bitnami/postgresql:latest`; both were
@@ -169,12 +174,39 @@ description: "Decisions log: deviations from and refinements of the design contr
   - Update check follows upstream Masterminds/semver ordering, so numeric non-release tags win
     "newest available" (e.g. cert-manager v1.16.2 -> `608111629`, grafana -> `9799770991`,
     postgres 16-alpine -> `18.6`); `latestInMajor` is sane. These images are counted as
-    major-update-available; consider ignoring tags whose major is far above the current one.
+    major-update-available. Fixed in master (candidate filter, see the 2026-10-03 update-check
+    entry below); not deployed yet.
   - The image list and the Supply chain page include 7 images no longer running (old
     `localhost:32000/security-posture-*` tags, no provenance): "74 of 86 images" there vs 79
-    in the scan.
+    in the scan. Overview "Images scored 73/73" counted only images with a Running pod (the 6
+    completed-Job images were missing). Fixed in master (current-image set, see below); not
+    deployed yet.
   - Docker Hub unauthenticated pull limits (see above); `registryAuth.existingSecret` would fix it.
 - Grace hazard: creating or removing a docker network adds/removes a host IP; MicroK8s
   `apiserver-kicker` then regenerates certs and restarts kubelite and containerd, killing every
   pod for ~40 s (2026-10-03 00:45). Use `--network host`; leave `sp-shots` alone.
 - Capacity: node memory requests are ~99% allocated; root filesystem 46 GB free (88%) after pruning superseded local images.
+- 2026-10-03 (provenance, deviation from provenance-collector-pack): update candidates are
+  filtered before the Masterminds/semver ordering. Only version-like tags count (optional `v`,
+  2-3 numeric components, 4th tolerated, optional suffix; no bare integers, no MAJOR over 4
+  digits, no dates unless the current tag is a date), candidates more than
+  `provenance.maxMajorJump` (50, `PROVENANCE_MAX_MAJOR_JUMP`) majors above the current one are
+  ignored, and a candidate must carry the current tag's variant suffix shape (`-alpine`,
+  `-py3.12`, ...); real prereleases (rc/beta/dev/...) still follow `skipPrerelease`. Reason:
+  upstream's ordering made CI build-number tags (`608111629`) the newest version and suggested
+  other image variants, which charged a wrong major-update penalty. Details in PROVENANCE.md.
+- 2026-10-03 (api/ui): one image set for counts: the *current* images are the unique images in
+  the latest done scan's inventory (`views.current_image_ids`, the scan's `imagesTotal` on a full
+  scan), including completed-Job images that have no Running pod; images seen only in older scans
+  are *stale*. `/summary.images` = `{total: current, scanned: with a score, failed: no successful
+  scanner, running: with a Running pod}` (severity counts and top risks stay on Running images, as
+  the vulnerability score does). `/supply-chain` counts and lists default to current images
+  (`?includeStale=true` restores all of the provenance scan's rows; `stale` = left out).
+  `/images` items carry `current` and accept `?current=`; the UI Supply chain page asks for
+  `current=true` and filters client-side too (also in its fallback summary).
+- 2026-10-03 (api/ui, controls): `GET /compliance/families` returns `{baseline, items, totals:{baseline,
+  catalog}}` instead of a bare list (the UI client accepts both). The Compliance tiles mixed
+  denominators ("20/287" was the MODERATE baseline, "64 not implemented / 2 unknown" counted the
+  292-control catalog view). Every tile (Compliance and the Overview controls tile) now shows the
+  baseline numbers with the baseline name in the label; catalog numbers are in a tooltip. Clicking
+  a status tile also filters the catalog table to the baseline so its row count matches.

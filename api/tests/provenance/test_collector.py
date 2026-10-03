@@ -218,3 +218,28 @@ async def test_stage_collector_pass_key_file_is_verified_by_the_collector():
                                          config_fingerprint(ps))
     assert seen and not os.path.exists(seen[0])  # temp key removed after the run
     assert cos.calls == [] and out[1].signature == {"signed": True, "verified": False}
+
+
+async def test_stage_collector_pass_uses_python_update_check():
+    """Under engine=collector image updates come from the python check (candidate-tag
+    filter), not the collector's: CI build numbers never become "newest"."""
+    inv, key_to_id, items = inventory()
+    seen = []
+
+    async def runner(cfg):
+        seen.append(cfg)
+        return report()  # says web 1.0 -> 2.1.0 (major)
+
+    async def tags_for(registry, repo):
+        return {("ghcr.io", "org/web"): ["1.0", "1.0.1", "608111629"],
+                ("docker.io", "grafana/grafana"): ["11.2.0", "11.2.1", "9799770991"]}.get((registry, repo))
+
+    ps = ProvenanceSettings()
+    st = ProvenanceStage(Settings(), None, collector_runner=runner)
+    out, _, _ = await st._collector_pass(items, inv, key_to_id, ps, None, CosignConfig("", "", ""),
+                                         config_fingerprint(ps), tags_for)
+    assert seen[0].check_updates is False  # the collector does not list tags at all
+    assert out[1].updates == {"1.0": {"currentTag": "1.0", "latestInMajor": "1.0.1", "newestAvailable": "1.0.1",
+                                      "updateAvailable": True}}
+    assert not out[1].inputs.major_behind
+    assert out[2].updates["11.2.0"]["newestAvailable"] == "11.2.1"

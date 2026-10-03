@@ -240,7 +240,7 @@ class ProvenanceStage:
         if self.collector_runner is not None:
             try:
                 collected, collector_helm, engine_msg = await self._collector_pass(
-                    items, inv, key_to_id, ps, verifier, cosign_cfg, fp)
+                    items, inv, key_to_id, ps, verifier, cosign_cfg, fp, tags_for)
                 log_line(engine_msg)
                 log.info("provenance.collector_ingested", scan_id=scan_id, msg=engine_msg)
             except Exception as e:  # noqa: BLE001  (binary error, timeout, bad JSON): python does everything
@@ -284,12 +284,14 @@ class ProvenanceStage:
         return {o.image_id: o.inputs for o in outcomes}
 
     # ------------------------------------------------------------ collector
-    def collector_config(self, ps: ProvenanceSettings, key_file: str) -> collector_mod.CollectorConfig:
+    def collector_config(self, ps: ProvenanceSettings, key_file: str,
+                         updates: bool = True) -> collector_mod.CollectorConfig:
         auth_file = self.env.registry_auth_file or (
             os.path.join(os.environ["DOCKER_CONFIG"], "config.json") if os.environ.get("DOCKER_CONFIG") else None)
         return collector_mod.CollectorConfig(
             verify_signatures=ps.verify_signatures, cosign_public_key_file=key_file, check_sbom=ps.check_sbom,
-            check_provenance=ps.check_provenance, check_updates=ps.check_updates, update_level=ps.update_level,
+            check_provenance=ps.check_provenance, check_updates=ps.check_updates and updates,
+            update_level=ps.update_level,
             skip_prerelease=ps.skip_prerelease, helm_enabled=ps.helm_releases,
             exclude_namespaces=list(self.env.excluded_namespaces),
             registry_timeout_seconds=self.env.provenance_registry_timeout, registry_auth_file=auth_file,
@@ -297,12 +299,12 @@ class ProvenanceStage:
 
     async def _collector_pass(self, items: list[ImageWork], inv: InventorySnapshot, key_to_id: dict[str, int],
                               ps: ProvenanceSettings, verifier: CosignVerifier | None, cosign_cfg: CosignConfig,
-                              fp: str) -> tuple[dict[int, ImageOutcome], list[helm_mod.HelmRelease], str]:
+                              fp: str, tags_for=None) -> tuple[dict[int, ImageOutcome], list[helm_mod.HelmRelease], str]:
         assert self.collector_runner is not None
         with tempfile.TemporaryDirectory(prefix="posture-cosign-") as keydir:
             key_file = (collector_mod.cosign_key_for_collector(ps.cosign_public_key, keydir)
                         if ps.verify_signatures else "")
-            report = await self.collector_runner(self.collector_config(ps, key_file))
+            report = await self.collector_runner(self.collector_config(ps, key_file, updates=tags_for is None))
         collector_mod.validate_report(report)
         version = (report.get("metadata") or {}).get("collectorVersion") or "unknown"
         res = collector_mod.match_report(report, inv.containers, key_to_id, {w.image_id: w.ref.digest for w in items})
@@ -317,11 +319,16 @@ class ProvenanceStage:
             if w is None:
                 continue
             ing = collector_mod.ingest_records(recs, check_sbom=ps.check_sbom, check_provenance=ps.check_provenance,
-                                               check_updates=ps.check_updates,
+                                               check_updates=ps.check_updates and tags_for is None,
                                                verify_signatures=ps.verify_signatures)
             if not ing.resolved:
                 unresolved += 1
                 continue
+            if tags_for is not None:
+                # Image updates use the python check (candidate-tag filter: no CI build
+                # numbers, dates or other variants as "newest"); the collector's own
+                # update check is switched off (collector_config(..., updates=False)).
+                ing.updates = await self._updates_for(w, ps, tags_for)
             out[iid] = await self._outcome_from_collector(w, ing, ps, post_verifier, cosign_cfg.enabled, fp, version)
         for rec in res.unmatched[:10]:
             log.info("provenance.collector_unmatched", image=rec.get("image"), namespace=rec.get("namespace"),
@@ -361,6 +368,25 @@ class ProvenanceStage:
         rows = (await s.execute(select(ImageProvenance).where(ImageProvenance.id.in_(latest)))).scalars()
         return {r.image_id: r for r in rows}
 
+    async def _updates_for(self, w: ImageWork, ps: ProvenanceSettings, tags_for) -> dict[str, Any]:
+        """{tag: UpdateInfo JSON} for every tag the digest runs under (python update check,
+        with this pack's candidate-tag filter; used by both engines)."""
+        updates: dict[str, Any] = {}
+        if not ps.check_updates:
+            return updates
+        for tag in sorted(w.tags):
+            if needs_tag_list(tag):
+                available = await tags_for(w.ref.registry, w.ref.repository)
+                if available is None:
+                    continue
+                info = compute_update(tag, available, skip_prerelease=ps.skip_prerelease,
+                                      update_level=ps.update_level,
+                                      max_major_jump=self.env.provenance_max_major_jump)
+            else:
+                info = compute_update(tag, None)
+            updates[tag] = info.as_json()
+        return updates
+
     async def _check_image(self, w: ImageWork, ps: ProvenanceSettings, reg: Registry, verifier: CosignVerifier | None,
                            prev: ImageProvenance | None, fp: str, force: bool, cosign_on: bool,
                            tags_for) -> ImageOutcome:
@@ -396,19 +422,7 @@ class ProvenanceStage:
                             "indexAttestations": len(atts.index_predicates), "sigTag": atts.sig_tag,
                             "sbomSource": sb.source if sb else None, "provenanceSource": pv.source if pv else None,
                             "resolvedDigest": atts.digest})
-        updates: dict[str, Any] = {}
-        if ps.check_updates:
-            for tag in sorted(w.tags):
-                if needs_tag_list(tag):
-                    available = await tags_for(ref.registry, ref.repository)
-                    if available is None:
-                        continue
-                    info = compute_update(tag, available, skip_prerelease=ps.skip_prerelease,
-                                          update_level=ps.update_level,
-                                          max_major_jump=self.env.provenance_max_major_jump)
-                else:
-                    info = compute_update(tag, None)
-                updates[tag] = info.as_json()
+        updates = await self._updates_for(w, ps, tags_for)
         primary = ref.tag if ref.tag in updates else (sorted(updates)[0] if updates else ref.tag)
         upd = UpdateInfo.from_json(updates.get(primary or "")) if primary is not None else None
         if error:  # registry unreachable / rate limited: unknown, not failed (no penalty; not cached)

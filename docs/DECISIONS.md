@@ -123,6 +123,10 @@
   `collector/`). Collector RBAC needs (pods, namespaces, apps/batch owners, secrets for Helm)
   are already covered by the reader ClusterRole and the optional helm-releases ClusterRole;
   the configmaps verbs of their chart were only for their ConfigMap sink and are not added.
+- 2026-10-03 (provenance engine, grace): The first grace scan with engine=collector showed the
+  collector's update check reintroducing the bogus "newest" tags fixed in the Python check
+  (`5ac1e7f`). Image update checks therefore stay in Python under both engines; the collector runs
+  with `PROVENANCE_CHECK_UPDATES=false` (this also halves the tag-list traffic to Docker Hub).
 
 ## Grace deployment status (2026-10-03, phase 2)
 

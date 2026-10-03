@@ -24,8 +24,18 @@ build stage and installs it at `/usr/local/bin/provenance-collector`. Selection:
 | `collector` (default) | Once per scan the stage runs `provenance-collector --once --output <tmp>/report.json` under the worker's ServiceAccount, with `PROVENANCE_*` built from the effective settings (below), and ingests the report. Falls back to `python` per image and for the whole run (see below). If the binary is missing the worker logs `provenance.collector_missing` and uses `python`. |
 | `python` | The worker's own checks (the rest of this page). |
 
+**Image update checks stay in Python under both engines.** The collector's update
+check (Masterminds/semver over every tag) lets CI build numbers, dates and other image
+variants win "newest available" (cert-manager `608111629`, grafana `9799770991`,
+postgres `16-alpine` → `18.6`); the Python check applies this pack's candidate-tag filter
+(see "Differences"). So the stage runs the collector with
+`PROVENANCE_CHECK_UPDATES=false` and computes `updates` per tag itself; porting the filter
+to `collector/internal/registry/updates.go` is an open question for the maintainers.
+Helm chart updates, which the collector never fills, use `helmReleases.chartRepos` as
+before.
+
 Settings passed to the binary: `verifySignatures`, `checkSBOM`, `checkProvenance`,
-`checkUpdates`, `updateLevel`, `skipPrerelease`, `helmReleases` (→
+`updateLevel`, `skipPrerelease`, `helmReleases` (→
 `PROVENANCE_HELM_ENABLED`), `scanner.excludedNamespaces` (→
 `PROVENANCE_EXCLUDE_NAMESPACES`), `registryTimeoutSeconds`, `REGISTRY_AUTH_FILE` /
 `DOCKER_CONFIG` (→ `PROVENANCE_REGISTRY_AUTH`) and `CLUSTER_NAME`. A cosign key given as
@@ -86,7 +96,7 @@ scanners run. Per unique image digest it does the following:
 | signature | Looks for the legacy cosign `sha256-<hex>.sig` tag and for sigstore bundle / cosign OCI-1.1 signature referrers. When a key or keyless identity is configured it then runs `cosign verify` (pinned cosign v3.1.3 in the worker image). |
 | SBOM | Looks in four places, in order: OCI referrers (the referrers API, then the `sha256-<hex>` fallback tag), BuildKit attestation manifests inside the image index, cosign `.att` (the DSSE payload is decoded), and the cosign `.sbom` tag. The format is `spdx` or `cyclonedx`. |
 | SLSA provenance | Same places as SBOM. Accepts predicate types `https://slsa.dev/provenance/*` and `https://in-toto.io/provenance/*`. |
-| updates | Lists the repository's tags through the registry API. Parsing and ordering are compatible with Masterminds/semver v3 `NewVersion`. Honours `updateLevel` (patch / minor / major) and `skipPrerelease`. |
+| updates | Lists the repository's tags through the registry API. Parsing and ordering are compatible with Masterminds/semver v3 `NewVersion`, but only *version-like* tags with the current tag's variant suffix are candidates (see "Update candidates" below). Honours `updateLevel` (patch / minor / major) and `skipPrerelease`. |
 | Helm releases | Reads `sh.helm.release.v1.*` Secrets (label `owner=helm`) and keeps the latest revision of every release in any status, like `helm list --all`. Optionally checks for chart updates against `provenance.helmReleases.chartRepos`. |
 
 Results are stored per image per scan in `image_provenance`, with a denormalized copy in
@@ -187,6 +197,9 @@ The rest of our API does too. Theirs only needs any authenticated user.
 
 Native endpoints: `GET /api/v1/supply-chain` returns counts, score/grade, check toggles
 and lists (`unsigned`, `unverified`, `outdated`, `withoutSbom`, `withoutProvenance`).
+Counts and lists cover only images in the latest done scan's inventory (the scan's image
+count); `stale` says how many were left out and `?includeStale=true` adds them back.
+`GET /api/v1/images` carries `current` (false = stale) and accepts `?current=true|false`.
 `GET /api/v1/helm-releases?namespace=` returns their `HelmRecord` plus `revision`,
 `lastDeployed`, `chartSource` and `scanId`. `/api/v1/summary` gains `supplyChainScore`
 and `supplyChain`. `ImageSummary.provenance` carries `{checkedAt, signature, sbom,
@@ -249,6 +262,28 @@ unchanged. With `internalService.name: provenance-collector-web`, a release inst
 - **Chart updates.** Helm releases get `update` when `helmReleases.chartRepos` knows the
   chart. Theirs never fills it, so `helmReleasesWithUpdates` is always 0 there.
 - **Helm discovery.** It is off by default because of the cluster-wide Secrets RBAC.
+- **Update candidates.** Theirs accepts every tag Masterminds/semver parses, so CI build
+  numbers and dates win `newestAvailable` (cert-manager `v1.16.2` -> `608111629`,
+  grafana -> `9799770991`) and count as major updates, and `postgres:16-alpine` is
+  offered `18.6` (a different image variant). Ours keeps their parsing and ordering but
+  filters the candidate tags first:
+  - *Version-like* only: optional `v`, 2-3 dot-separated numeric components (a 4th
+    numeric one is tolerated and orders after the 3rd), optional `-suffix` / `+build`.
+    Rejected: bare integers (`16`, `608111629`), a MAJOR with more than 4 digits,
+    dates (`2024-01-15`, `2024.01.15`, `20240115`; allowed when the current tag is
+    itself a date-style CalVer tag) and non-numeric 4th parts (`2.10.0.d5b5a1-py38`).
+  - Major-jump guard: candidates whose MAJOR is more than `provenance.maxMajorJump`
+    (default 50, `PROVENANCE_MAX_MAJOR_JUMP`, `0` = off) above the current one.
+  - Same variant: a suffix is a *prerelease* when one of its identifiers is
+    alpha/beta/rc/pre/preview/dev/snapshot/canary/nightly/git (optionally with a number);
+    any other suffix is an image *variant* (`alpine`, `py3.12`, `distroless`,
+    `debian-12-r5`, a build number). Candidates must have the current tag's variant
+    shape (digits abstracted: `alpine3.20` = `alpine#.#`), so `16-alpine` only sees
+    `16.6-alpine` / `17.2-alpine` and `16.4` never sees `16.6-alpine`. Prereleases
+    follow `skipPrerelease` as before.
+
+  The current tag still short-circuits exactly like theirs (`latest` / unparseable tags
+  are not listed). Chart versions go through the same filter.
 - **Not implemented.** `provenance.useSbomForGrype` (feeding attestation SBOMs to
   grype) is not implemented yet. Their ConfigMap output mode, upload endpoint, retention
   pruning and frontend branding have no equivalent.

@@ -19,8 +19,18 @@ build stage and installs it at `/usr/local/bin/provenance-collector`. Selection:
 | `collector` (default) | Once per scan the stage runs `provenance-collector --once --output <tmp>/report.json` under the worker's ServiceAccount, with `PROVENANCE_*` built from the effective settings (below), and ingests the report. Falls back to `python` per image and for the whole run (see below). If the binary is missing the worker logs `provenance.collector_missing` and uses `python`. |
 | `python` | The worker's own checks (the rest of this page). |
 
+**Image update checks stay in Python under both engines.** The collector's update
+check (Masterminds/semver over every tag) lets CI build numbers, dates and other image
+variants win "newest available" (cert-manager `608111629`, grafana `9799770991`,
+postgres `16-alpine` → `18.6`); the Python check applies this pack's candidate-tag filter
+(see "Differences"). So the stage runs the collector with
+`PROVENANCE_CHECK_UPDATES=false` and computes `updates` per tag itself; porting the filter
+to `collector/internal/registry/updates.go` is an open question for the maintainers.
+Helm chart updates, which the collector never fills, use `helmReleases.chartRepos` as
+before.
+
 Settings passed to the binary: `verifySignatures`, `checkSBOM`, `checkProvenance`,
-`checkUpdates`, `updateLevel`, `skipPrerelease`, `helmReleases` (→
+`updateLevel`, `skipPrerelease`, `helmReleases` (→
 `PROVENANCE_HELM_ENABLED`), `scanner.excludedNamespaces` (→
 `PROVENANCE_EXCLUDE_NAMESPACES`), `registryTimeoutSeconds`, `REGISTRY_AUTH_FILE` /
 `DOCKER_CONFIG` (→ `PROVENANCE_REGISTRY_AUTH`) and `CLUSTER_NAME`. A cosign key given as

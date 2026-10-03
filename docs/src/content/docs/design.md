@@ -183,7 +183,7 @@ Endpoints:
 |---|---|
 | `GET /health`, `GET /ready` | `{status:"ok"}` (ready checks DB) |
 | `GET /me` | `{username,email,groups[],isAdmin}` |
-| `GET /summary` | `{score,grade,vulnScore,postureScore,generatedAt,lastScan:{id,status,startedAt,finishedAt,imagesTotal,imagesDone,imagesFailed},counts:{critical,high,medium,low,negligible,unknown},fixable:{critical,high,...},images:{total,scanned,failed},workloads,namespaces,scanners:[{name,version,dbUpdatedAt,healthy,lastError}],trend:[{scanId,finishedAt,score,grade,critical,high}] (last 30), topRisks:[{imageId,ref,score,grade,critical,high,workloads}] (10), checks:{passed,failed,total}}` |
+| `GET /summary` | `{score,grade,vulnScore,postureScore,generatedAt,lastScan:{id,status,startedAt,finishedAt,imagesTotal,imagesDone,imagesFailed},counts:{critical,high,medium,low,negligible,unknown},fixable:{critical,high,...},images:{total,scanned,failed,running} (latest done scan's unique images; DECISIONS 2026-10-03),workloads,namespaces,scanners:[{name,version,dbUpdatedAt,healthy,lastError}],trend:[{scanId,finishedAt,score,grade,critical,high}] (last 30), topRisks:[{imageId,ref,score,grade,critical,high,workloads}] (10), checks:{passed,failed,total}}` |
 | `GET /images?namespace=&grade=&severity=&q=&sort=&order=&page=&pageSize=` | `{items:[ImageSummary],total,page,pageSize}` |
 | `GET /images/{id}` | `ImageDetail` = ImageSummary + `findings:[Finding]` + `usedBy:[ContainerRef]` + `scans:[ScannerRun]` + `postureFindings` |
 | `GET /vulnerabilities?severity=&q=&fixable=&page=` | CVE-centric: `{items:[{vulnId,severity,scanners[],agreement,imagesAffected,workloadsAffected,fixAvailable,cvss,title,url}],total}` |
@@ -443,8 +443,9 @@ SSP + assessment results an assessor can accept, with per-control status and evi
 ### API
 - `GET /compliance/controls` (extend existing): per control `{control,title,family,baseline,status,
   components[],assertions:[{id,title,status,evidence,checkedAt}],findingsOpen,checksFailed}`.
-- `GET /compliance/families` → rollup `[{family,title,implemented,partial,notImplemented,inherited,
-  notApplicable,unknown}]`.
+- `GET /compliance/families` → `{baseline, items:[{family,title,total,implemented,partial,notImplemented,
+  inherited,notApplicable,unknown}], totals:{baseline:{name,total,implemented,partial,notImplemented,
+  inherited,unknown,notApplicable}, catalog:{...}}}` (items = the selected baseline; DECISIONS 2026-10-03).
 - `GET /compliance/assertions`, `POST /compliance/assertions/run` (202, runs engine now), `GET
   /compliance/assertions/{id}` (history).
 - Report type `oscal-ssp` (json): OSCAL 1.1.2 `system-security-plan` with `control-implementation.
