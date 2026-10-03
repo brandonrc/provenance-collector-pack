@@ -16,24 +16,40 @@ spec:
     helm:
       releaseName: provenance-test
       valuesObject:
-        image:
-          repository: provenance-collector
-          tag: test
-          pullPolicy: Never
-        config:
+        images:
+          api: { repository: security-posture-api, tag: test, pullPolicy: Never }
+          worker: { repository: security-posture-worker, tag: test, pullPolicy: Never }
+          ui: { repository: security-posture-ui, tag: test, pullPolicy: Never }
+        # The sandbox has no gateway login in front of the test client; the
+        # API is reached by port-forward. Development/CI only.
+        auth:
+          mode: disabled
+        scanner:
+          parallelism: 2
+          # Clair needs ~2 GiB and a long first update; trivy + grype suffice here.
+          clair:
+            enabled: false
+          mirror:
+            enabled: false
+        provenance:
+          engine: collector
           verifySignatures: false
           checkUpdates: false
-          helmEnabled: true
+          helmReleases:
+            enabled: true
+          compat:
+            internalService:
+              enabled: true
+              allowedNamespaces: [default]
+        controlsEngine:
+          enabled: false
+        networkPolicy:
+          enabled: false
         persistence:
-          mode: http
-        webUI:
-          enabled: true
-        # The integration test runs the SPA itself via Vite (proxying /api to
-        # the port-forwarded dashboard), so the chart's nginx frontend is not
-        # needed. Disabling it also avoids requiring frontend.keycloak.url,
-        # which the sandbox has no Keycloak to provide — leaving it enabled
-        # fails the whole chart render and nothing (including -web) is created.
-        frontend:
+          worker: 5Gi
+          trivy: 2Gi
+          postgres: 2Gi
+        nebariapp:
           enabled: false
   destination:
     server: https://kubernetes.default.svc

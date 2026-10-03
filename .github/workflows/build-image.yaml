@@ -1,24 +1,32 @@
 name: Build Image
 
+# Builds, attests (SPDX SBOM + SLSA provenance as OCI referrers) and keyless-
+# signs the pack's images:
+#
+#   api        quay.io/nebari/provenance-collector-pack-api      ghcr.io/<repo>/api
+#   worker     quay.io/nebari/provenance-collector-pack-worker   ghcr.io/<repo>/worker
+#              (bundles the Go collector; build context = repo root)
+#   ui         quay.io/nebari/provenance-collector-pack-ui       ghcr.io/<repo>/ui
+#   collector  quay.io/nebari/provenance-collector               ghcr.io/<repo>
+#              (the standalone collector + dashboard image, unchanged name)
+#
+# chart/values.yaml defaults to the quay.io api/worker/ui images; release.yaml
+# stamps their tag to the release version.
+
 on:
   push:
     branches: [main]
     paths:
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
-      - "Dockerfile"
+      - "collector/**"
+      - "api/**"
+      - "ui/**"
       - ".github/workflows/build-image.yaml"
   pull_request:
     branches: [main]
     paths:
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
-      - "Dockerfile"
-      - "frontend/**"
+      - "collector/**"
+      - "api/**"
+      - "ui/**"
       - ".github/workflows/build-image.yaml"
   release:
     types: [published]
@@ -34,36 +42,57 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     # Fork PRs can't read QUAY_USERNAME/QUAY_PASSWORD secrets and would fail at
-    # the login step. Skip them entirely; the Test/lint workflows still verify
-    # the Dockerfile builds via `docker build` in the integration job.
-    #
-    # Dependabot PRs need the same treatment for a different reason: their
-    # branches live in this repo, so the fork check above passes, but GitHub
-    # runs them against a separate Dependabot secrets store, leaving the Quay
-    # secrets empty. Match on the actor instead.
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]')
+    # the login step; Dependabot PRs run against a separate secrets store. On
+    # those, build without pushing (still proves the Dockerfiles build).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: api
+            dockerfile: api/Dockerfile.api
+            quay: quay.io/nebari/provenance-collector-pack-api
+            ghcr_suffix: /api
+          - name: worker
+            context: .
+            dockerfile: api/Dockerfile.worker
+            quay: quay.io/nebari/provenance-collector-pack-worker
+            ghcr_suffix: /worker
+          - name: ui
+            context: ui
+            dockerfile: ui/Dockerfile
+            quay: quay.io/nebari/provenance-collector-pack-ui
+            ghcr_suffix: /ui
+          - name: collector
+            context: collector
+            dockerfile: collector/Dockerfile
+            quay: quay.io/nebari/provenance-collector
+            ghcr_suffix: ""
     permissions:
       contents: read
       packages: write
       id-token: write # keyless cosign signing via GitHub OIDC
+    env:
+      PUSH: >-
+        ${{ github.event_name != 'pull_request' ||
+        (github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Buildx needs the docker-container driver to attach OCI attestations
-      # (sbom: true, provenance: mode=max). The default docker driver errors
-      # out with "Attestation is not supported for the docker driver."
+      # (sbom: true, provenance: mode=max).
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Install cosign
+        if: env.PUSH == 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: 'v3.1.1'
 
       - name: Log in to GHCR
+        if: env.PUSH == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -71,6 +100,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Quay.io
+        if: env.PUSH == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: quay.io
@@ -82,8 +112,8 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: |
-            ghcr.io/${{ github.repository }}
-            quay.io/nebari/provenance-collector
+            ghcr.io/${{ github.repository }}${{ matrix.ghcr_suffix }}
+            ${{ matrix.quay }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -96,104 +126,37 @@ jobs:
         id: version
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=dev-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+            echo "version=dev-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
-          push: true
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ env.PUSH == 'true' }}
+          # VERSION: collector image; COLLECTOR_VERSION: the collector bundled in the worker.
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
+            COLLECTOR_VERSION=${{ steps.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Attach an SPDX SBOM and a SLSA provenance attestation as OCI
-          # referrers on every build, in both registries. The collector's own
-          # internal/verify/sbom.go and internal/verify/provenance.go look for
-          # these via the OCI referrers API — without them, our own image would
-          # show up as "no SBOM, no provenance" when scanned by us (#29).
+          # SPDX SBOM + SLSA provenance as OCI referrers: our own images then
+          # show up signed/SBOM/provenance in the pack's own supply-chain view.
           sbom: true
           provenance: mode=max
 
       # Keyless cosign signature over the pushed digest, in both registries.
-      # Uses the workflow's OIDC identity (no secret / no managed key); this is
-      # the last "grey" supply-chain signal on our own image (#29). Skipped on
-      # PRs, which have no durable published artifact worth signing.
       - name: Sign images (keyless)
-        if: github.event_name != 'pull_request'
+        if: env.PUSH == 'true' && github.event_name != 'pull_request'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           COSIGN_YES: "true"
         run: |
-          for repo in "ghcr.io/${{ github.repository }}" "quay.io/nebari/provenance-collector"; do
+          for repo in "ghcr.io/${{ github.repository }}${{ matrix.ghcr_suffix }}" "${{ matrix.quay }}"; do
             echo "Signing ${repo}@${DIGEST}"
             cosign sign "${repo}@${DIGEST}"
           done
-
-  # The standalone React UI ships as its own nginx image. It has no third-party
-  # registry mirror (unlike the Go image on Quay), so it publishes to GHCR only.
-  build-frontend:
-    runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: read
-      packages: write
-      id-token: write # keyless cosign signing via GitHub OIDC
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: 'v3.1.1'
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository }}/frontend
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=ref,event=pr
-
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: frontend
-          file: frontend/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          sbom: true
-          provenance: mode=max
-
-      - name: Sign image (keyless)
-        if: github.event_name != 'pull_request'
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          COSIGN_YES: "true"
-        run: |
-          repo="ghcr.io/${{ github.repository }}/frontend"
-          echo "Signing ${repo}@${DIGEST}"
-          cosign sign "${repo}@${DIGEST}"

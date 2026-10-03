@@ -1,30 +1,179 @@
-name: Release Chart
-
-# Releases the chart via the shared reusable workflow in nebari-dev/.github.
-# On a chart/Chart.yaml version bump it pins the three first-party image tags
-# to the release commit's sha, packages the chart, creates a GitHub Release,
-# and opens a PR in nebari-dev/helm-repository (published to
-# quay.io/nebari/charts).
-#
-# Only works for official packs in the nebari-dev org (NEBARI_HELM_REPO_TOKEN
-# and the central helm-repository). build-images.yaml runs on the same bump so
-# the pinned sha-<short> tags exist.
+name: Release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "chart/Chart.yaml"
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
-  release:
-    uses: nebari-dev/.github/.github/workflows/pack-release.yaml@v1
-    with:
-      chart-path: chart
-      chart-name: nebari-security-posture-pack
-      tag-paths: |
-        images.api.tag
-        images.worker.tag
-        images.ui.tag
-    secrets:
-      NEBARI_HELM_REPO_TOKEN: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}
+  lint-and-test:
+    name: Lint Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Lint chart
+        run: |
+          helm dependency build chart/
+          helm lint chart/
+
+  # The Go collector as a standalone release asset (single-run mode:
+  # `provenance-collector --once --output -`), for use outside the pack.
+  collector-binaries:
+    name: Collector binaries
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: collector/go.mod
+          cache-dependency-path: collector/go.sum
+
+      - name: Build
+        working-directory: collector
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            out="provenance-collector_${VERSION}_${os}_${arch}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X github.com/nebari-dev/provenance-collector/internal/report.Version=${VERSION}" \
+              -o "$out/provenance-collector" ./cmd/provenance-collector
+            cp ../LICENSE "$out/"
+            tar -czf "../dist/${out}.tar.gz" "$out"
+          done
+          (cd ../dist && sha256sum ./*.tar.gz > checksums.txt)
+
+      - name: Upload collector binaries to release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-helm-chart:
+    name: Package and Publish Helm Chart
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Stamp chart and image versions
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash .github/scripts/stamp-version.sh "${VERSION}"
+          cat chart/Chart.yaml
+
+      - name: Package Helm chart
+        run: |
+          mkdir -p dist
+          helm dependency build chart/
+          helm package chart/ --destination dist/
+
+      - name: Render release notes from template
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Preserve the existing release body (user-written "What's New" section)
+          # and append the install instructions from the template
+          EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body -q .body 2>/dev/null || echo "")
+          sed "s/\${VERSION}/${VERSION}/g" .github/release-template.md > /tmp/rendered-notes.md
+          if echo "$EXISTING" | grep -q "What's New"; then
+            WHATS_NEW=$(echo "$EXISTING" | sed -n '/## What'\''s New/,/## Installation/p' | sed '$ d')
+            sed -i "/## What's New/{N;s/## What's New\n-/${WHATS_NEW}/;}" /tmp/rendered-notes.md 2>/dev/null || true
+          fi
+          gh release edit "${GITHUB_REF_NAME}" -F /tmp/rendered-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Helm chart to release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist/*.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sync-helm-repository:
+    name: Sync Chart to Helm Repository
+    runs-on: ubuntu-latest
+    needs: publish-helm-chart
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Stamp chart and image versions
+        run: bash .github/scripts/stamp-version.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Sync chart to helm-repository
+        uses: nebari-dev/helm-repository/.github/actions/sync-chart@main
+        with:
+          chart-path: chart
+          # Published name kept from provenance-collector-pack <= 0.1.x.
+          chart-name: provenance-collector
+          token: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}
+
+  # Keep the version-bearing files on main in sync with the released version
+  # (chart/Chart.yaml, the api/worker/ui image tags in chart/values.yaml and
+  # examples/*.yaml), commit them back with [skip ci], then move the release
+  # tag onto the stamp commit.
+  stamp-version:
+    name: Stamp release version onto main
+    runs-on: ubuntu-latest
+    needs: publish-helm-chart
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stamp files with release version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          bash .github/scripts/stamp-version.sh "${TAG#v}"
+          git diff chart/ examples/ || true
+
+      - name: Commit and push to main
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if git diff --quiet chart/ examples/; then
+            echo "Nothing needed updating."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add chart/Chart.yaml chart/values.yaml examples/
+          git commit -m "chore: stamp version to ${TAG} [skip ci]"
+          git push
+          git fetch origin "refs/tags/${TAG}" --no-tags
+          if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$(git rev-parse HEAD^)" ]; then
+            git tag -f "${TAG}" HEAD
+            git push --force origin "refs/tags/${TAG}"
+            echo "Moved ${TAG} to $(git rev-parse HEAD)."
+          else
+            echo "::warning::main moved past ${TAG} before stamping; leaving the tag where it is."
+          fi

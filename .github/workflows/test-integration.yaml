@@ -1,71 +1,65 @@
 name: Integration Test
 
+# Deploys the merged chart (api, worker with the bundled Go collector, ui,
+# Postgres, Trivy) into a NIC sandbox through ArgoCD, runs one scan and checks
+# that the provenance engine ingested the collector's report and that the
+# provenance-collector report API (/api/reports/latest) still answers on the
+# unauthenticated compat Service, exactly as Grafana reads it.
+
 on:
-  # Manual trigger — lets us run the full integration suite against any branch
-  # (notably main) without pushing a code change, e.g. to isolate sandbox/ArgoCD
-  # infra regressions from repo changes.
+  # Manual trigger — run the full integration suite against any branch.
   workflow_dispatch:
   push:
     branches: [main]
   pull_request:
     branches: [main]
     paths:
-      - "cmd/**"
-      - "internal/**"
+      - "collector/**"
+      - "api/**"
+      - "ui/**"
       - "chart/**"
-      - "frontend/**"
-      - "Dockerfile"
-      - "go.mod"
       - ".github/workflows/test-integration.yaml"
       - ".github/argo-apps/provenance-collector.yaml"
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  FULLNAME: provenance-test-provenance-collector
 
 jobs:
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.ref }}
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
 
       - name: Set up Nebari sandbox
         id: sandbox
         uses: nebari-dev/action-nebari-sandbox@9ac369ebf87ac2ae217504dcbf824c77f70e429a # v3.0.0
         with:
           # Pinned rather than tracking `latest`, so a NIC release cannot turn
-          # this job red without a deliberate bump — which is exactly how v2
-          # broke: `latest` rolled to NIC v0.13.0, which dropped the
-          # existing-cluster + `file://` GitOps combination v2 was built on.
-          # v3 requires NIC >= v0.13.0 (local/kind cluster + local repository
-          # providers). `profile` is gone in v3 — the action is platform-only.
+          # this job red without a deliberate bump.
           nic-version: v0.13.0
           cluster-name: provenance-test
           resource-summary: "true"
 
       - name: Configure kubeconfig
-        run: echo "KUBECONFIG=${{ steps.sandbox.outputs.kubeconfig }}" >> $GITHUB_ENV
+        run: echo "KUBECONFIG=${{ steps.sandbox.outputs.kubeconfig }}" >> "$GITHUB_ENV"
 
-      - name: Build and load image
+      - name: Build and load images
         run: |
-          docker build --build-arg VERSION=test -t provenance-collector:test .
-          # v3 provisions the cluster through NIC's `local` provider, which is
-          # kind, not k3d. `kind` is preinstalled on ubuntu-latest; the cluster
-          # name is the action's output (kubectl context is `kind-<name>`).
-          kind load docker-image provenance-collector:test \
-            --name ${{ steps.sandbox.outputs.cluster-name }}
+          set -euo pipefail
+          docker build -f api/Dockerfile.api -t security-posture-api:test api
+          docker build -f api/Dockerfile.worker --build-arg COLLECTOR_VERSION=test -t security-posture-worker:test .
+          docker build -f ui/Dockerfile -t security-posture-ui:test ui
+          for img in api worker ui; do
+            kind load docker-image "security-posture-${img}:test" --name ${{ steps.sandbox.outputs.cluster-name }}
+          done
 
-      # add-software-pack waits for the Application CR to exist and to reach
-      # status.health.status=Healthy by default (wait-for-application and
-      # wait-healthy both default true). It also annotates nebari-root for a
-      # refresh internally, so consumers don't need to poll or nudge themselves.
-      - name: Register provenance-collector pack
+      - name: Register the pack
         uses: nebari-dev/action-nebari-sandbox/add-software-pack@9ac369ebf87ac2ae217504dcbf824c77f70e429a # v3.0.0
         with:
           gitops-dir: ${{ steps.sandbox.outputs.gitops-dir }}
@@ -73,26 +67,15 @@ jobs:
           chart-source: ./chart
           application-manifest: .github/argo-apps/provenance-collector.yaml
 
-      # add-software-pack's wait-healthy is not enough on its own: ArgoCD
-      # aggregates an Application with zero live resources to Healthy, so it
-      # returns as soon as the Application object exists — here that was 0.3s
-      # after creation, before a single manifest had synced. And `kubectl wait`
-      # exits NotFound immediately on a missing object (its --timeout never
-      # applies), so a condition-wait that runs too early fails in 0s rather
-      # than waiting. Wait for the chart's objects to actually exist first.
+      # ArgoCD aggregates an Application with zero live resources to Healthy, so
+      # wait for the chart's objects to exist before waiting on conditions
+      # (`kubectl wait` exits NotFound immediately on a missing object).
       - name: Wait for the chart's objects to sync
         run: |
-          for obj in \
-            deployment/provenance-test-provenance-collector-web \
-            cronjob/provenance-test-provenance-collector; do
-            echo "Waiting for ArgoCD to create $obj..."
-            for i in $(seq 1 60); do
-              if kubectl get "$obj" >/dev/null 2>&1; then
-                echo "  $obj exists (attempt $i)"
-                break
-              fi
-              if [ "$i" -eq 60 ]; then
-                echo "  timed out waiting for $obj"
+          for obj in deployment/${FULLNAME}-api deployment/${FULLNAME}-worker deployment/${FULLNAME}-ui; do
+            for i in $(seq 1 90); do
+              kubectl get "$obj" >/dev/null 2>&1 && { echo "$obj exists"; break; }
+              if [ "$i" -eq 90 ]; then
                 kubectl get application/provenance-collector -n argocd \
                   -o custom-columns='SYNC:.status.sync.status,HEALTH:.status.health.status'
                 kubectl get all
@@ -102,248 +85,56 @@ jobs:
             done
           done
 
-      - name: Wait for dashboard
+      - name: Wait for api, worker and ui
         run: |
-          kubectl wait --for=condition=available \
-            deployment/provenance-test-provenance-collector-web --timeout=180s
+          kubectl wait --for=condition=available deployment/${FULLNAME}-api --timeout=600s
+          kubectl wait --for=condition=available deployment/${FULLNAME}-ui --timeout=300s
+          # The worker becomes ready once its scanner databases are in place.
+          kubectl wait --for=condition=available deployment/${FULLNAME}-worker --timeout=1200s
 
-      - name: Run provenance collection
+      - name: Run a scan
         run: |
-          kubectl create job --from=cronjob/provenance-test-provenance-collector test-run
-          kubectl wait --for=condition=complete job/test-run --timeout=300s
-
-      - name: Wait for report availability
-        run: |
-          kubectl port-forward svc/provenance-test-provenance-collector-web 8080:8080 &
+          set -euo pipefail
+          kubectl port-forward svc/${FULLNAME}-api 8000:8000 > /tmp/pf-api.log 2>&1 &
           sleep 3
-          for i in $(seq 1 10); do
-            COUNT=$(curl -sf http://localhost:8080/api/reports | jq 'length' 2>/dev/null || echo "0")
-            if [ "$COUNT" -gt "0" ]; then
-              echo "Report available (attempt $i)"
-              break
-            fi
-            sleep 2
+          # 202 {id} for a new scan, 409 {scanId} when the worker's start-up scan is running.
+          ID=$(curl -s -XPOST localhost:8000/api/v1/scans -H 'content-type: application/json' -d '{"force": true}' | jq -r '.id // .scanId')
+          echo "scan id: ${ID}"
+          for i in $(seq 1 120); do
+            STATUS=$(curl -sf "localhost:8000/api/v1/scans/${ID}" | jq -r .status)
+            echo "attempt $i: ${STATUS}"
+            case "${STATUS}" in done) break ;; failed|cancelled) exit 1 ;; esac
+            sleep 15
           done
+          SCAN=$(curl -sf "localhost:8000/api/v1/scans/${ID}")
+          echo "${SCAN}" | jq -r '.log[]'
+          echo "${SCAN}" | jq -e '.status == "done"' > /dev/null
+          # The Go collector ran and its report was ingested.
+          echo "${SCAN}" | jq -e '[.log[] | select(test("provenance engine=collector \\(test\\)"))] | length > 0' > /dev/null
+          echo "${SCAN}" | jq -e '[.log[] | select(test("engine=collector failed"))] | length == 0' > /dev/null
 
-      - name: Verify report output
+      - name: Verify the provenance report API (Grafana path)
         run: |
-          echo "=== Job logs ==="
-          kubectl logs job/test-run
-
-          echo ""
-          echo "=== Report via Dashboard API ==="
+          set -euo pipefail
+          kubectl port-forward svc/${FULLNAME}-web-internal 8080:8080 > /tmp/pf-compat.log 2>&1 &
+          sleep 3
           REPORT=$(curl -sf http://localhost:8080/api/reports/latest)
-          echo "$REPORT" | jq .
-
+          echo "$REPORT" | jq .summary
           echo "$REPORT" | jq -e '.metadata.generatedAt' > /dev/null
           echo "$REPORT" | jq -e '.summary.totalImages > 0' > /dev/null
           echo "$REPORT" | jq -e '.images | length > 0' > /dev/null
-
-          echo ""
+          curl -sf http://localhost:8080/api/reports | jq -e 'length >= 1' > /dev/null
+          curl -sf "http://localhost:8080/api/export?format=csv" | head -3
           echo "Integration test passed!"
 
-      # Timeline scan-switch coverage (#19): deploy a second workload, trigger
-      # another scan, and verify via the dashboard UI that picking each
-      # timeline entry actually swaps the images table — not just the stat cards.
-      #
-      # We can't use `busybox` as the sentinel — the sandbox's platform stack
-      # ships `nebari-landing-webapi`, which uses `busybox:1.36` as a sidecar.
-      # That collides with the test's image and the "appeared between scans"
-      # check can't distinguish the two reports. `traefik/whoami` is small,
-      # single-purpose, and not bundled by any pack we ship.
-      - name: Deploy second workload (timeline-switch setup)
-        run: |
-          kubectl create deployment timeline-sentinel \
-            --image=traefik/whoami:v1.10.3
-          kubectl wait --for=condition=available deployment/timeline-sentinel --timeout=120s
-
-      - name: Run second provenance collection
-        run: |
-          kubectl create job --from=cronjob/provenance-test-provenance-collector test-run-2
-          kubectl wait --for=condition=complete job/test-run-2 --timeout=300s
-
-      - name: Wait for second report to land in the dashboard
-        run: |
-          for i in $(seq 1 20); do
-            COUNT=$(curl -sf http://localhost:8080/api/reports | jq 'length' 2>/dev/null || echo "0")
-            if [ "$COUNT" -ge "2" ]; then
-              echo "Both reports visible (attempt $i, count=$COUNT)"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Timed out waiting for the second report; current count=$COUNT"
-          curl -sf http://localhost:8080/api/reports | jq .
-          exit 1
-
-      - name: Verify the two reports differ on the sentinel image
-        run: |
-          REPORTS=$(curl -sf http://localhost:8080/api/reports)
-          NEWEST=$(echo "$REPORTS" | jq -r '.[0].filename')
-          OLDEST=$(echo "$REPORTS" | jq -r '.[1].filename')
-          echo "Newest: $NEWEST"
-          echo "Oldest: $OLDEST"
-
-          # The reports list is sorted DESC by generatedAt; the sentinel image
-          # should be in the newer one only.
-          NEW_HAS=$(curl -sf "http://localhost:8080/api/reports/$NEWEST" \
-            | jq '[.images[].image] | any(test("traefik/whoami"))')
-          OLD_HAS=$(curl -sf "http://localhost:8080/api/reports/$OLDEST" \
-            | jq '[.images[].image] | any(test("traefik/whoami"))')
-
-          echo "Newest contains traefik/whoami: $NEW_HAS"
-          echo "Oldest contains traefik/whoami: $OLD_HAS"
-
-          if [ "$NEW_HAS" != "true" ] || [ "$OLD_HAS" != "false" ]; then
-            echo "API distinctness check failed — the bug cannot be tested if the"
-            echo "two reports don't actually differ on disk."
-            exit 1
-          fi
-
-      # The dashboard is API-only now; the UI is the standalone React SPA. Serve
-      # it with Vite (dev mode) proxying /api to the port-forwarded dashboard,
-      # and point the browser tests at Vite. VITE_DEV_NO_AUTH bypasses the
-      # browser Keycloak login for CI (the sandbox chart installs with auth off).
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
-        with:
-          node-version-file: frontend/.node-version
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Start frontend (Vite) for e2e
-        working-directory: frontend
-        run: |
-          npm ci
-          VITE_DEV_NO_AUTH=true WEBAPI_URL=http://localhost:8080 \
-            nohup npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/vite.log 2>&1 &
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:5173/ >/dev/null 2>&1 && { echo "Vite up (attempt $i)"; break; }
-            sleep 1
-          done
-
-      - name: Install Playwright
-        working-directory: test/e2e
-        run: |
-          npm init -y > /dev/null
-          npm install --no-save @playwright/test@1.48.2
-          npx playwright install --with-deps chromium
-
-      - name: Run dashboard e2e tests
-        working-directory: test/e2e
-        env:
-          DASHBOARD_URL: http://localhost:5173
-          TIMELINE_NEW_IMAGE: traefik/whoami
-        run: npx playwright test --reporter=list
-
-      # Always upload — videos and traces are recorded on every run, not just
-      # on failure, so reviewers can see what the bot actually saw without
-      # having to re-run anything locally.
-      - name: Upload Playwright artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: playwright-artifacts
-          path: |
-            test/e2e/playwright-report
-            test/e2e/test-results
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # Capture screenshots of the web dashboard.
-      # Auto-doc artifact only — runs on push to main (committed back into
-      # docs/screenshots/ by the next step). Skipped on PRs so that a broken
-      # screenshot step does not block code review; UI-touching PRs that want
-      # to preview the render should run this workflow locally or land it and
-      # check the auto-doc commit afterwards.
-      - name: Capture dashboard screenshots
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          # Install locally rather than globally so the inline node script
-          # below can require('puppeteer') without NODE_PATH gymnastics.
-          npm install puppeteer
-          mkdir -p docs/screenshots
-
-          node << 'JSEOF'
-          const puppeteer = require('puppeteer');
-
-          (async () => {
-            const browser = await puppeteer.launch({
-              headless: 'new',
-              args: ['--no-sandbox', '--disable-setuid-sandbox'],
-            });
-
-            const page = await browser.newPage();
-            await page.setViewport({ width: 1440, height: 900 });
-
-            // Vite (dev, VITE_DEV_NO_AUTH) serves the SPA at :5173 and proxies
-            // /api to the dashboard; no browser login needed for the screenshot.
-            await page.goto('http://localhost:5173', { waitUntil: 'networkidle0', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 2000));
-            await page.screenshot({ path: 'docs/screenshots/dashboard-overview.png', fullPage: false });
-
-            const row = await page.$('tr.cursor-pointer');
-            if (row) {
-              await row.click();
-              await new Promise(r => setTimeout(r, 500));
-              await page.screenshot({ path: 'docs/screenshots/dashboard-detail.png', fullPage: false });
-            }
-
-            await browser.close();
-            console.log('Screenshots captured successfully');
-          })();
-          JSEOF
-
-      - name: Commit screenshots
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/screenshots/
-          if git diff --cached --quiet; then
-            echo "No screenshot changes to commit"
-          else
-            git commit -m "docs: update dashboard screenshots [skip ci]"
-            git push
-          fi
-
-      - name: Upload screenshots as artifacts
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dashboard-screenshots
-          path: docs/screenshots/
-          if-no-files-found: ignore
-
-      # The cluster must still exist for these kubectl calls to return
-      # anything. v3 destroys the deployment in the action's *post* step, which
-      # runs after every regular step in the job, so this is safe where it sits
-      # — there is no explicit cleanup step left to order against.
       - name: Debug info on failure
         if: failure()
         run: |
-          echo "=== Pack Application ==="
           kubectl get applications -n argocd \
             -o custom-columns='NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status' || true
-          kubectl get application/provenance-collector -n argocd \
-            -o jsonpath='{.status.conditions}{"\n"}' || true
-          echo ""
-          echo "=== Pods ==="
           kubectl get pods -A
-          echo ""
-          echo "=== Jobs ==="
-          kubectl describe job/test-run || true
-          kubectl describe job/test-run-2 || true
-          echo ""
-          echo "=== Job logs ==="
-          kubectl logs job/test-run || true
-          kubectl logs job/test-run-2 || true
-          echo ""
-          echo "=== Dashboard logs ==="
-          kubectl logs deployment/provenance-test-provenance-collector-web || true
-          echo ""
-          echo "=== Reports listing ==="
-          curl -sf http://localhost:8080/api/reports | jq . || true
-          echo ""
-          echo "=== Events ==="
-          kubectl get events --sort-by=.lastTimestamp | tail -30
+          for c in api worker ui; do
+            echo "=== ${c} logs ==="
+            kubectl logs deployment/${FULLNAME}-${c} --all-containers --tail=200 || true
+          done
+          kubectl get events --sort-by=.lastTimestamp | tail -40
