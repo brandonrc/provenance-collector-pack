@@ -357,17 +357,40 @@ All configuration is via environment variables, set through `values.yaml`:
 | `PROVENANCE_REPORT_UPLOAD_URL` | *(set by chart)* | Dashboard upload URL used in http mode |
 | `PROVENANCE_REPORT_UPLOAD_TIMEOUT` | `30s` | Timeout for the upload request in http mode |
 | `PROVENANCE_REGISTRY_TIMEOUT` | `30s` | Timeout for registry operations |
+| `PROVENANCE_REGISTRY_AUTH` | *(set by chart)* | Docker `config.json` (or a directory with `config.json` / `.dockerconfigjson`) used for every registry call |
+| `PROVENANCE_REGISTRY_CA_FILE` | *(empty)* | PEM bundle of extra CAs for registry TLS |
+| `PROVENANCE_REGISTRY_INSECURE` | *(empty)* | Comma-separated registry hosts allowed over HTTP / unverified TLS |
 | `PROVENANCE_CLUSTER_NAME` | *(empty)* | Cluster name in report metadata |
 
 See [docs/src/content/docs/configuration.md](docs/src/content/docs/configuration.md) for the full reference.
 
+## Running once from another tool
+
+The collector always does one collection and exits. `--output` sends the report
+to a file (written atomically) or to stdout instead of the configured sink, so
+another tool can run the binary and read the result directly; logs go to stderr
+when the report goes to stdout:
+
+```bash
+KUBECONFIG=~/.kube/config provenance-collector --output - > report.json
+```
+
+Standalone binaries (linux/darwin, amd64/arm64) are attached to each GitHub
+Release with SLSA provenance and a cosign-signed `checksums.txt`. See
+[Consuming the Report](docs/src/content/docs/consuming-the-report.md) for exit
+codes, `warnings`, and how to pin the report contract.
+
 ## Report Format
 
-Reports are JSON with this structure:
+Reports are JSON with this structure. The contract is versioned
+(`metadata.schemaVersion`, semver) and published as a JSON Schema in
+[`schema/report.schema.json`](schema/report.schema.json); an example produced
+by an end-to-end test is [`testdata/report.golden.json`](testdata/report.golden.json).
 
 ```json
 {
   "metadata": {
+    "schemaVersion": "1.1.0",
     "generatedAt": "2025-01-15T06:00:00Z",
     "collectorVersion": "0.1.0",
     "clusterName": "production",
@@ -409,9 +432,16 @@ Reports are JSON with this structure:
     "imagesWithUpdates": 5,
     "totalHelmReleases": 8,
     "helmReleasesWithUpdates": 2
-  }
+  },
+  "warnings": [
+    "helm: listing helm releases in namespace kube-system: secrets is forbidden: ..."
+  ]
 }
 ```
+
+`warnings` lists what the collector could not see (Helm namespaces it may not
+read, digests it could not resolve, failed update checks) and is omitted when
+empty, so "no Helm releases" and "not allowed to look" are distinguishable.
 
 See [docs/src/content/docs/report-schema.md](docs/src/content/docs/report-schema.md) for the full schema reference.
 
@@ -479,6 +509,11 @@ kubectl create secret docker-registry harbor-pull-secret \
 registryCredentials:
   existingSecret: harbor-pull-secret
 ```
+
+For a registry behind a private CA, set `PROVENANCE_REGISTRY_CA_FILE` to a
+mounted PEM bundle; for a lab registry on plain HTTP or a self-signed
+certificate, list its `host:port` in `PROVENANCE_REGISTRY_INSECURE` (only the
+listed hosts skip verification).
 
 Air-gapped clusters and registry mirrors are tracked in
 [#1](https://github.com/nebari-dev/nebari-provenance-collector-pack/issues/1).
@@ -552,7 +587,7 @@ kubectl logs -n provenance-system job/test-run
 
 ```
 cmd/
-  provenance-collector/       Collector entry point (CronJob)
+  provenance-collector/       Collector entry point (CronJob, or `--output` for one-shot use)
   dashboard/                  Dashboard entry point (JSON API, API-only)
 internal/
   config/                     Environment-based configuration
@@ -560,8 +595,9 @@ internal/
   dashboard/                  HTTP server + JSON API handlers, OIDC auth, scan/export
   discovery/
     images.go                 Pod-based container image discovery
-    helm.go                   Helm release discovery via Helm SDK
+    helm.go                   Helm release discovery from Helm's release Secrets
   registry/
+    client.go                 Shared registry auth / custom CA / insecure-host settings
     digest.go                 Digest resolution via go-containerregistry
     updates.go                Semver-based update checking
   verify/
@@ -571,7 +607,10 @@ internal/
   report/
     types.go                  Report JSON schema types
     generator.go              Orchestrator with concurrent enrichment
-    writer.go                 HTTP, PVC, and ConfigMap output writers
+    writer.go                 HTTP, PVC, ConfigMap and file/stdout output writers
+  reportschema/               JSON Schema generator for the report (hack/genschema)
+schema/report.schema.json     Published report contract (generated, drift-checked)
+testdata/report.golden.json   Example report from an end-to-end test run
 frontend/                     React + TypeScript SPA (Vite, Tailwind, Nebari design system)
     src/                      Components, hooks, Jotai store, API layer
     Dockerfile                node build → nginx serve; nginx.default.conf
@@ -634,7 +673,7 @@ Publishing then runs four things:
 3. **helm-repository sync** — the shared [`sync-chart`](https://github.com/nebari-dev/helm-repository/tree/main/.github/actions/sync-chart) action opens a **pull request** against `nebari-dev/helm-repository`. **The chart is not installable until that PR is merged.** A tagged-but-unmerged version fails to resolve for consumers, and in ArgoCD that surfaces as `Sync: Unknown` with a `ComparisonError` while the app still reports `Healthy` — a silent stall.
 4. **Version stamping** — `chart/Chart.yaml` and `examples/*.yaml` are rewritten to the new version and committed back to `main` as `chore: stamp version to <tag> [skip ci]`. This is cosmetic for consumers (the published chart is already stamped by step 2) but keeps `main` from advertising a stale version.
 
-Images are built by `build-image.yaml`, which also triggers on `release: published` and tags them `{{version}}`, `{{major}}.{{minor}}`, and `latest`.
+Before any of that, the release re-runs the Test and Lint workflows and builds the images (`build-image.yaml`, called from `release.yaml`, tagged `{{version}}`, `{{major}}.{{minor}}`, and `latest`); the chart is only published if all of them pass. The same gate builds the standalone collector binaries (linux/darwin × amd64/arm64), attaches a SLSA build provenance attestation to each, signs `checksums.txt` keyless with cosign, and uploads them with `report.schema.json` to the Release.
 
 ### Verify the release landed
 

@@ -7,7 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `provenance-collector --output <path|->` writes the report to a file
+  (atomically: temp file + rename) or to stdout instead of the
+  `PROVENANCE_REPORT_OUTPUT` sink, so another tool can run the binary once and
+  read the result. With `--output -` logs go to stderr. Without the flag
+  nothing changes.
+- `metadata.schemaVersion` (semver, now `1.1.0`) on every report, a JSON Schema
+  generated from `internal/report/types.go` at `schema/report.schema.json`
+  (`go run ./hack/genschema`, drift-checked in CI), and a golden report
+  `testdata/report.golden.json` produced by an end-to-end test of the collector
+  against a fake cluster.
+- `warnings` on the report: Helm namespaces whose release Secrets could not be
+  listed, images whose digest could not be resolved, and failed update checks.
+  Previously these were only logged, so a 403 on Secrets looked like "no Helm
+  releases".
+- `PROVENANCE_REGISTRY_CA_FILE` (extra CAs for registry TLS) and
+  `PROVENANCE_REGISTRY_INSECURE` (hosts allowed over HTTP / unverified TLS).
+- Release binaries (linux/darwin, amd64/arm64) with SLSA build provenance and a
+  keyless cosign signature on `checksums.txt`; `report.schema.json` is attached
+  to each release.
+- Docs: [Consuming the Report](docs/src/content/docs/consuming-the-report.md).
+
 ### Changed
+- Helm releases are read directly from Helm's release Secrets instead of
+  through `helm list`'s action client. Same result (latest revision of every
+  release, any status), no REST mapper / discovery client, and a much smaller
+  dependency tree.
+- Release workflow is gated on the Test and Lint workflows and builds images
+  itself (`build-image.yaml` is now called from `release.yaml` instead of
+  triggering on `release` separately), so the chart can't be published ahead
+  of its images. All actions, including the org reusable workflow and
+  `helm-repository`'s `sync-chart`, are pinned by SHA.
+- CI: `go mod tidy -diff`, a coverage floor for `internal/...` (85%),
+  `govulncheck` (reachable vulnerabilities fail the build unless allowlisted
+  with a reason), and the schema drift check.
+- Go toolchain pinned in one place, the `toolchain` line in `go.mod`
+  (`go1.26.8`): CI uses it via `setup-go` with `GOTOOLCHAIN=local`, and the
+  Dockerfile switches to it at build time. The Dockerfile also honours
+  `TARGETARCH` instead of hard-coding amd64.
+- Dependencies flagged by `govulncheck` bumped (grpc, x/crypto, x/net, x/text,
+  go-jose, sigstore-go, rekor, timestamp-authority, go-tuf, in-toto-golang).
+- Cosign tests no longer touch Docker Hub: they sign and verify images in an
+  in-memory registry. The whole Go test suite runs offline.
 - Integration test migrated to `action-nebari-sandbox` v3, which provisions the
   sandbox through NIC's `local` (kind) provider instead of k3d + NIC's
   `existing` provider. The `profile` input is gone, the image is loaded with
@@ -16,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now pinned to `v0.13.0` rather than tracking `latest`.
 
 ### Fixed
+- `PROVENANCE_REGISTRY_AUTH` is now actually used, for every registry call
+  (digests, tag listing, signatures, SBOM and provenance/referrers lookups).
+  It was read but ignored, and referrers lookups were always anonymous. The
+  chart now points it at the mounted Secret directory, so both
+  `docker-registry` Secrets (`.dockerconfigjson`) and `config.json` keys work.
+  A set but unreadable auth or CA file now fails the run at startup.
+- `PROVENANCE_REGISTRY_TIMEOUT` is applied to digest lookups (it was read but
+  never used).
+- A run interrupted by SIGTERM/SIGINT no longer writes a report made of failed
+  lookups.
+- `metadata.namespacesScanned` is sorted, so identical clusters give identical
+  reports.
 - Integration test no longer races ArgoCD's first sync. `add-software-pack`'s
   `wait-healthy` returns as soon as the Application exists, because ArgoCD
   aggregates an Application with zero live resources to `Healthy`; the
