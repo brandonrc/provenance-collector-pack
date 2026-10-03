@@ -2,13 +2,14 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
+	"sort"
 
-	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v3/pkg/storage/driver"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 // DiscoveredRelease represents a Helm release found in the cluster.
@@ -23,26 +24,41 @@ type DiscoveredRelease struct {
 
 // HelmDiscoverer finds deployed Helm releases in the cluster.
 type HelmDiscoverer interface {
+	// Discover returns the releases it could list. A non-nil error with
+	// non-nil results means discovery was partial: some namespaces failed
+	// (see NamespaceError) but the returned releases are still valid.
 	Discover(ctx context.Context) ([]DiscoveredRelease, error)
 }
 
-// KubeHelmDiscoverer discovers Helm releases via the Kubernetes API.
+// NamespaceError reports that the Helm releases of one namespace could not be
+// listed (typically RBAC: no get/list on Secrets there).
+type NamespaceError struct {
+	Namespace string
+	Err       error
+}
+
+func (e *NamespaceError) Error() string {
+	return fmt.Sprintf("listing helm releases in namespace %s: %v", e.Namespace, e.Err)
+}
+
+func (e *NamespaceError) Unwrap() error { return e.Err }
+
+// KubeHelmDiscoverer discovers Helm releases by reading Helm's release
+// Secrets (the default "secrets" storage driver) through the Kubernetes API.
 type KubeHelmDiscoverer struct {
 	client            kubernetes.Interface
-	restConfig        *rest.Config
 	namespaces        []string
 	excludeNamespaces map[string]bool
 }
 
 // NewHelmDiscoverer creates a HelmDiscoverer backed by the Kubernetes API.
-func NewHelmDiscoverer(client kubernetes.Interface, restConfig *rest.Config, namespaces, excludeNamespaces []string) HelmDiscoverer {
+func NewHelmDiscoverer(client kubernetes.Interface, namespaces, excludeNamespaces []string) HelmDiscoverer {
 	excl := make(map[string]bool, len(excludeNamespaces))
 	for _, ns := range excludeNamespaces {
 		excl[ns] = true
 	}
 	return &KubeHelmDiscoverer{
 		client:            client,
-		restConfig:        restConfig,
 		namespaces:        namespaces,
 		excludeNamespaces: excl,
 	}
@@ -54,62 +70,55 @@ func (d *KubeHelmDiscoverer) Discover(ctx context.Context) ([]DiscoveredRelease,
 		return nil, err
 	}
 
-	var results []DiscoveredRelease
+	results := []DiscoveredRelease{}
+	var errs []error
 	for _, ns := range namespaces {
 		releases, err := d.listReleasesInNamespace(ns)
 		if err != nil {
-			slog.Warn("failed to list helm releases", "namespace", ns, "error", err)
+			errs = append(errs, &NamespaceError{Namespace: ns, Err: err})
 			continue
 		}
 		results = append(results, releases...)
 	}
 
-	return results, nil
+	return results, errors.Join(errs...)
 }
 
+// listReleasesInNamespace returns the latest revision of every release in ns,
+// whatever its status, sorted by name. This is what `helm list --all -n ns`
+// shows.
 func (d *KubeHelmDiscoverer) listReleasesInNamespace(ns string) ([]DiscoveredRelease, error) {
-	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(
-		newRESTClientGetter(d.restConfig, ns),
-		ns,
-		"secrets",
-		func(format string, v ...interface{}) {
-			slog.Debug(fmt.Sprintf(format, v...))
-		},
-	); err != nil {
-		return nil, fmt.Errorf("initializing helm action config for namespace %s: %w", ns, err)
-	}
-
-	listAction := action.NewList(actionConfig)
-	listAction.All = true
-	listAction.AllNamespaces = false
-	listAction.SetStateMask()
-
-	releases, err := listAction.Run()
+	store := driver.NewSecrets(d.client.CoreV1().Secrets(ns))
+	all, err := store.List(func(*release.Release) bool { return true })
 	if err != nil {
-		return nil, fmt.Errorf("listing helm releases in namespace %s: %w", ns, err)
+		return nil, err
 	}
 
-	var results []DiscoveredRelease
-	for _, rel := range releases {
-		chartName := ""
-		chartVersion := ""
-		appVersion := ""
-		if rel.Chart != nil && rel.Chart.Metadata != nil {
-			chartName = rel.Chart.Metadata.Name
-			chartVersion = rel.Chart.Metadata.Version
-			appVersion = rel.Chart.Metadata.AppVersion
+	latest := make(map[string]*release.Release, len(all))
+	for _, rel := range all {
+		if cur, ok := latest[rel.Name]; ok && cur.Version > rel.Version {
+			continue
 		}
-
-		results = append(results, DiscoveredRelease{
-			Name:         rel.Name,
-			Namespace:    rel.Namespace,
-			ChartName:    chartName,
-			ChartVersion: chartVersion,
-			AppVersion:   appVersion,
-			Status:       rel.Info.Status.String(),
-		})
+		latest[rel.Name] = rel
 	}
+
+	results := make([]DiscoveredRelease, 0, len(latest))
+	for _, rel := range latest {
+		dr := DiscoveredRelease{Name: rel.Name, Namespace: rel.Namespace}
+		if dr.Namespace == "" {
+			dr.Namespace = ns
+		}
+		if rel.Chart != nil && rel.Chart.Metadata != nil {
+			dr.ChartName = rel.Chart.Metadata.Name
+			dr.ChartVersion = rel.Chart.Metadata.Version
+			dr.AppVersion = rel.Chart.Metadata.AppVersion
+		}
+		if rel.Info != nil {
+			dr.Status = rel.Info.Status.String()
+		}
+		results = append(results, dr)
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 	return results, nil
 }
 

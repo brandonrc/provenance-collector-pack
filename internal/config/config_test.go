@@ -104,3 +104,18 @@ func TestSplitCSV(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRegistryOptions(t *testing.T) {
+	t.Setenv("PROVENANCE_REGISTRY_AUTH", "/etc/provenance/config.json")
+	t.Setenv("PROVENANCE_REGISTRY_CA_FILE", "/etc/provenance/ca.pem")
+	t.Setenv("PROVENANCE_REGISTRY_INSECURE", "registry.lab:5000, 10.0.0.5 ,")
+
+	cfg := Load()
+
+	if cfg.RegistryAuth != "/etc/provenance/config.json" || cfg.RegistryCAFile != "/etc/provenance/ca.pem" {
+		t.Errorf("auth/CA not loaded: %+v", cfg)
+	}
+	if len(cfg.RegistryInsecure) != 2 || cfg.RegistryInsecure[0] != "registry.lab:5000" || cfg.RegistryInsecure[1] != "10.0.0.5" {
+		t.Errorf("RegistryInsecure = %q", cfg.RegistryInsecure)
+	}
+}

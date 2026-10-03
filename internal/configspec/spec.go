@@ -73,7 +73,21 @@ var Vars = []Var{
 		Scope:       ScopeCollector,
 		Kind:        KindString,
 		Default:     "",
-		Description: "Path to a Docker `config.json` for private registry authentication.",
+		Description: "Path to a Docker `config.json` for private registry authentication, or a directory containing `config.json` or `.dockerconfigjson` (a mounted `docker-registry` Secret). Used for every registry call (digests, tags, signatures, SBOM and provenance lookups); registries it does not list fall back to `$DOCKER_CONFIG` and credential helpers. The collector exits at startup if the file is set but unreadable.",
+	},
+	{
+		Name:        "PROVENANCE_REGISTRY_CA_FILE",
+		Scope:       ScopeCollector,
+		Kind:        KindString,
+		Default:     "",
+		Description: "Path to a PEM bundle of extra CA certificates trusted for registry TLS, added to the system roots. Use for registries behind a private CA.",
+	},
+	{
+		Name:        "PROVENANCE_REGISTRY_INSECURE",
+		Scope:       ScopeCollector,
+		Kind:        KindStringList,
+		Default:     "",
+		Description: "Comma-separated registry hosts (`host` or `host:port`) that may be reached over plain HTTP or with an unverified TLS certificate. Applies only to the listed hosts.",
 	},
 	{
 		Name:        "PROVENANCE_REGISTRY_TIMEOUT",

@@ -8,7 +8,6 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-containerregistry/pkg/crane"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/nebari-dev/provenance-collector/internal/report"
 )
@@ -29,17 +28,18 @@ const (
 type RegistryUpdateChecker struct {
 	skipPrerelease bool
 	updateLevel    string
-	opts           []crane.Option
+	client         *Client
 }
 
 // NewUpdateChecker creates an UpdateChecker that queries container registries.
 // skipPrerelease filters out alpha/beta/RC versions. updateLevel controls which
 // version bumps are reported: "patch" (all), "minor" (minor+major), "major".
-func NewUpdateChecker(skipPrerelease bool, updateLevel string, opts ...crane.Option) UpdateChecker {
+// client supplies auth and TLS settings (nil means the defaults).
+func NewUpdateChecker(skipPrerelease bool, updateLevel string, client *Client) UpdateChecker {
 	if updateLevel == "" {
 		updateLevel = UpdateLevelPatch
 	}
-	return &RegistryUpdateChecker{skipPrerelease: skipPrerelease, updateLevel: updateLevel, opts: opts}
+	return &RegistryUpdateChecker{skipPrerelease: skipPrerelease, updateLevel: updateLevel, client: client}
 }
 
 func (c *RegistryUpdateChecker) Check(ctx context.Context, imageRef string) (*report.UpdateInfo, error) {
@@ -54,12 +54,7 @@ func (c *RegistryUpdateChecker) Check(ctx context.Context, imageRef string) (*re
 		return &report.UpdateInfo{CurrentTag: tag}, nil
 	}
 
-	opts := append([]crane.Option{
-		crane.WithContext(ctx),
-		crane.WithTransport(remote.DefaultTransport),
-	}, c.opts...)
-
-	tags, err := crane.ListTags(repo, opts...)
+	tags, err := crane.ListTags(repo, c.client.CraneOptions(ctx, repo)...)
 	if err != nil {
 		return nil, fmt.Errorf("listing tags for %s: %w", repo, err)
 	}

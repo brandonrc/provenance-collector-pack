@@ -22,7 +22,9 @@ Read by `cmd/provenance-collector` (the CronJob).
 |---|---|---|---|
 | `PROVENANCE_NAMESPACES` | string list | *(empty)* | Comma-separated namespaces to scan. Empty means scan all namespaces. |
 | `PROVENANCE_EXCLUDE_NAMESPACES` | string list | *(empty)* | Comma-separated namespaces to exclude from the scan. |
-| `PROVENANCE_REGISTRY_AUTH` | string | *(empty)* | Path to a Docker `config.json` for private registry authentication. |
+| `PROVENANCE_REGISTRY_AUTH` | string | *(empty)* | Path to a Docker `config.json` for private registry authentication, or a directory containing `config.json` or `.dockerconfigjson` (a mounted `docker-registry` Secret). Used for every registry call (digests, tags, signatures, SBOM and provenance lookups); registries it does not list fall back to `$DOCKER_CONFIG` and credential helpers. The collector exits at startup if the file is set but unreadable. |
+| `PROVENANCE_REGISTRY_CA_FILE` | string | *(empty)* | Path to a PEM bundle of extra CA certificates trusted for registry TLS, added to the system roots. Use for registries behind a private CA. |
+| `PROVENANCE_REGISTRY_INSECURE` | string list | *(empty)* | Comma-separated registry hosts (`host` or `host:port`) that may be reached over plain HTTP or with an unverified TLS certificate. Applies only to the listed hosts. |
 | `PROVENANCE_REGISTRY_TIMEOUT` | duration | `30s` | Timeout for registry operations (digest resolution, tag listing). |
 | `PROVENANCE_CHECK_UPDATES` | bool | `true` | Check registries for newer semver tags. |
 | `PROVENANCE_UPDATE_LEVEL` | string | `patch` | Minimum version bump to flag as an update: `patch`, `minor`, or `major`. |

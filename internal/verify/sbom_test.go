@@ -80,7 +80,7 @@ func TestDetectSBOMFormat_NoMatch(t *testing.T) {
 }
 
 func TestNewSBOMDiscoverer(t *testing.T) {
-	d := NewSBOMDiscoverer()
+	d := NewSBOMDiscoverer(nil)
 	if d == nil {
 		t.Fatal("expected non-nil discoverer")
 	}
@@ -113,7 +113,7 @@ func TestSBOMFormatFromPredicate(t *testing.T) {
 }
 
 func TestOCISBOMDiscoverer_InvalidRef(t *testing.T) {
-	d := NewSBOMDiscoverer()
+	d := NewSBOMDiscoverer(nil)
 	info, err := d.Discover(context.Background(), ":::invalid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -124,7 +124,7 @@ func TestOCISBOMDiscoverer_InvalidRef(t *testing.T) {
 }
 
 func TestOCISBOMDiscoverer_UnreachableImage(t *testing.T) {
-	d := NewSBOMDiscoverer()
+	d := NewSBOMDiscoverer(nil)
 	// Registry calls fail; should return HasSBOM=false without an error.
 	info, err := d.Discover(context.Background(), "localhost:1/nonexistent:v0.0.0")
 	if err != nil {

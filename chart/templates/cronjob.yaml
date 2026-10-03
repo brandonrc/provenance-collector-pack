@@ -46,8 +46,10 @@ spec:
                     name: {{ include "provenance-collector.fullname" . }}-config
               {{- if .Values.registryCredentials.existingSecret }}
               env:
+                # The Secret's key (.dockerconfigjson for a docker-registry
+                # Secret, or config.json) is resolved inside this directory.
                 - name: PROVENANCE_REGISTRY_AUTH
-                  value: /etc/docker/config.json
+                  value: /etc/docker
               {{- end }}
               {{- if or (eq .Values.persistence.mode "pvc") .Values.registryCredentials.existingSecret }}
               volumeMounts:

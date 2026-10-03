@@ -2,8 +2,11 @@ package report
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 )
 
 // Mock implementations for testing
@@ -152,5 +155,79 @@ func TestGeneratorReport(t *testing.T) {
 	}
 	if report.Summary.TotalHelmReleases != 1 {
 		t.Errorf("expected totalHelmReleases=1, got %d", report.Summary.TotalHelmReleases)
+	}
+}
+
+type failingUpdateChecker struct{}
+
+func (failingUpdateChecker) Check(context.Context, string) (*UpdateInfo, error) {
+	return nil, fmt.Errorf("listing tags: 429 Too Many Requests")
+}
+
+type mockProvenanceChecker struct{}
+
+func (mockProvenanceChecker) Check(_ context.Context, ref string) (*ProvenanceInfo, error) {
+	if ref == "signed:1" {
+		return &ProvenanceInfo{HasProvenance: true, PredicateType: "https://slsa.dev/provenance/v1"}, nil
+	}
+	return &ProvenanceInfo{}, nil
+}
+
+func TestGeneratorSchemaVersionClockAndWarnings(t *testing.T) {
+	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("x", 3600))
+	gen := NewGenerator(
+		GeneratorConfig{CheckUpdates: true, Now: func() time.Time { return fixed }},
+		&mockDigestResolver{digests: map[string]string{"signed:1": "sha256:aa"}},
+		failingUpdateChecker{},
+		nil, nil,
+		mockProvenanceChecker{},
+	)
+	images := []ImageInput{
+		{Image: "signed:1", Namespace: "a"},
+		{Image: "private.example.com/app:1", Namespace: "a", WorkloadKind: "ReplicaSet", WorkloadName: "x"},
+		{Image: "private.example.com/app:1", Namespace: "b", WorkloadKind: "ReplicaSet", WorkloadName: "y"},
+	}
+	r := gen.Generate(context.Background(), images, nil, []string{"a", "b"}, "helm: zeta", "helm: alpha")
+
+	if r.Metadata.SchemaVersion != SchemaVersion {
+		t.Errorf("schemaVersion = %q", r.Metadata.SchemaVersion)
+	}
+	if !r.Metadata.GeneratedAt.Equal(fixed) || r.Metadata.GeneratedAt.Location() != time.UTC {
+		t.Errorf("generatedAt = %v, want %v in UTC", r.Metadata.GeneratedAt, fixed)
+	}
+	if r.Images[0].Provenance == nil || !r.Images[0].Provenance.HasProvenance || r.Summary.ImagesWithProvenance != 1 {
+		t.Errorf("provenance not recorded: %+v / %+v", r.Images[0], r.Summary)
+	}
+
+	want := []string{
+		"helm: alpha",
+		"helm: zeta",
+		"image private.example.com/app:1: digest not resolved: unknown image: private.example.com/app:1",
+		"image private.example.com/app:1: update check failed: listing tags: 429 Too Many Requests",
+		"image signed:1: update check failed: listing tags: 429 Too Many Requests",
+	}
+	if len(r.Warnings) != len(want) {
+		t.Fatalf("warnings = %q", r.Warnings)
+	}
+	for i := range want {
+		if r.Warnings[i] != want[i] {
+			t.Errorf("warnings[%d] = %q, want %q", i, r.Warnings[i], want[i])
+		}
+	}
+}
+
+func TestGeneratorNoWarningsOmitted(t *testing.T) {
+	gen := NewGenerator(GeneratorConfig{}, nil, nil, nil, nil, nil)
+	r := gen.Generate(context.Background(), nil, nil, []string{})
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if strings.Contains(s, `"warnings"`) {
+		t.Errorf("a clean report should omit warnings: %s", s)
+	}
+	if !strings.Contains(s, `"images":[]`) || !strings.Contains(s, `"schemaVersion":"`+SchemaVersion+`"`) {
+		t.Errorf("images must be an empty array and schemaVersion set: %s", s)
 	}
 }

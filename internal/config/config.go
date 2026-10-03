@@ -14,6 +14,11 @@ type Config struct {
 	ExcludeNamespaces []string
 	// Path to Docker config.json for registry authentication.
 	RegistryAuth string
+	// Path to a PEM bundle of extra CA certificates for registry TLS.
+	RegistryCAFile string
+	// Registry hosts (host or host:port) reachable over plain HTTP or with an
+	// unverified TLS certificate.
+	RegistryInsecure []string
 	// Whether to verify cosign signatures on images.
 	VerifySignatures bool
 	// Path or KMS URI for cosign public key (empty = keyless/existence check only).
@@ -61,6 +66,8 @@ func Load() *Config {
 		Namespaces:               splitCSV(os.Getenv("PROVENANCE_NAMESPACES")),
 		ExcludeNamespaces:        splitCSV(os.Getenv("PROVENANCE_EXCLUDE_NAMESPACES")),
 		RegistryAuth:             os.Getenv("PROVENANCE_REGISTRY_AUTH"),
+		RegistryCAFile:           os.Getenv("PROVENANCE_REGISTRY_CA_FILE"),
+		RegistryInsecure:         splitCSV(os.Getenv("PROVENANCE_REGISTRY_INSECURE")),
 		VerifySignatures:         envBool("PROVENANCE_VERIFY_SIGNATURES", true),
 		CosignPublicKey:          os.Getenv("PROVENANCE_COSIGN_PUBLIC_KEY"),
 		HelmEnabled:              envBool("PROVENANCE_HELM_ENABLED", true),

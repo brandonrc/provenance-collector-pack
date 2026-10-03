@@ -31,7 +31,12 @@ func pushBuildKitIndex(t *testing.T, predicateTypes ...string) string {
 	srv := httptest.NewServer(registry.New())
 	t.Cleanup(srv.Close)
 	host := strings.TrimPrefix(srv.URL, "http://")
-	refStr := host + "/test/buildkit:latest"
+	return pushBuildKitIndexTo(t, host+"/test/buildkit:latest", nil, predicateTypes...)
+}
+
+// pushBuildKitIndexTo is pushBuildKitIndex against an existing registry.
+func pushBuildKitIndexTo(t *testing.T, refStr string, opts []remote.Option, predicateTypes ...string) string {
+	t.Helper()
 
 	ref, err := name.ParseReference(refStr)
 	if err != nil {
@@ -73,7 +78,7 @@ func pushBuildKitIndex(t *testing.T, predicateTypes ...string) string {
 		},
 	)
 
-	if err := remote.WriteIndex(ref, idx); err != nil {
+	if err := remote.WriteIndex(ref, idx, opts...); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
 	return refStr
@@ -82,7 +87,7 @@ func pushBuildKitIndex(t *testing.T, predicateTypes ...string) string {
 func TestIndexAttestationPredicateTypes_BuildKit(t *testing.T) {
 	ref := pushBuildKitIndex(t, predicateSPDX, "https://slsa.dev/provenance/v0.2")
 
-	got := indexAttestationPredicateTypes(context.Background(), ref)
+	got := indexAttestationPredicateTypes(context.Background(), nil, ref)
 	for _, want := range []string{predicateSPDX, "https://slsa.dev/provenance/v0.2"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("indexAttestationPredicateTypes() = %v, want to contain %q", got, want)
@@ -95,7 +100,7 @@ func TestOCISBOMDiscoverer_BuildKitIndexAttestation(t *testing.T) {
 	// the referrers fallback tag cannot see. This is the regression target.
 	ref := pushBuildKitIndex(t, predicateSPDX)
 
-	info, err := NewSBOMDiscoverer().Discover(context.Background(), ref)
+	info, err := NewSBOMDiscoverer(nil).Discover(context.Background(), ref)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -110,7 +115,7 @@ func TestOCISBOMDiscoverer_BuildKitIndexAttestation(t *testing.T) {
 func TestSLSAProvenanceChecker_BuildKitIndexAttestation(t *testing.T) {
 	ref := pushBuildKitIndex(t, "https://slsa.dev/provenance/v0.2")
 
-	info, err := NewProvenanceChecker().Check(context.Background(), ref)
+	info, err := NewProvenanceChecker(nil).Check(context.Background(), ref)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -128,7 +133,7 @@ func TestOCISBOMDiscoverer_BuildKitIndexNoSBOM(t *testing.T) {
 	// positive.
 	ref := pushBuildKitIndex(t, "https://slsa.dev/provenance/v1")
 
-	info, err := NewSBOMDiscoverer().Discover(context.Background(), ref)
+	info, err := NewSBOMDiscoverer(nil).Discover(context.Background(), ref)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}

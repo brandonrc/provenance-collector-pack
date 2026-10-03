@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/crane"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // DigestResolver resolves container image references to their SHA256 digests.
@@ -18,16 +17,18 @@ type DigestResolver interface {
 // CraneDigestResolver uses go-containerregistry (crane) to resolve digests.
 type CraneDigestResolver struct {
 	timeout time.Duration
-	opts    []crane.Option
+	client  *Client
 	mu      sync.Mutex
 	cache   map[string]string
 }
 
-// NewDigestResolver creates a DigestResolver using crane.
-func NewDigestResolver(timeout time.Duration, opts ...crane.Option) DigestResolver {
+// NewDigestResolver creates a DigestResolver using crane. timeout bounds each
+// lookup (0 means no limit beyond ctx); client supplies auth and TLS settings
+// (nil means the defaults).
+func NewDigestResolver(timeout time.Duration, client *Client) DigestResolver {
 	return &CraneDigestResolver{
 		timeout: timeout,
-		opts:    opts,
+		client:  client,
 		cache:   make(map[string]string),
 	}
 }
@@ -40,12 +41,13 @@ func (r *CraneDigestResolver) Resolve(ctx context.Context, imageRef string) (str
 	}
 	r.mu.Unlock()
 
-	opts := append([]crane.Option{
-		crane.WithContext(ctx),
-		crane.WithTransport(remote.DefaultTransport),
-	}, r.opts...)
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
 
-	digest, err := crane.Digest(imageRef, opts...)
+	digest, err := crane.Digest(imageRef, r.client.CraneOptions(ctx, imageRef)...)
 	if err != nil {
 		return "", fmt.Errorf("resolving digest for %s: %w", imageRef, err)
 	}

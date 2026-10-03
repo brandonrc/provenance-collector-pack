@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/nebari-dev/provenance-collector/internal/registry"
 	"github.com/nebari-dev/provenance-collector/internal/report"
 )
 
@@ -14,11 +15,14 @@ type ProvenanceChecker interface {
 }
 
 // SLSAProvenanceChecker checks for SLSA provenance using OCI referrers.
-type SLSAProvenanceChecker struct{}
+type SLSAProvenanceChecker struct {
+	client *registry.Client
+}
 
-// NewProvenanceChecker creates a ProvenanceChecker.
-func NewProvenanceChecker() ProvenanceChecker {
-	return &SLSAProvenanceChecker{}
+// NewProvenanceChecker creates a ProvenanceChecker. client supplies registry
+// auth and TLS settings (nil means the defaults).
+func NewProvenanceChecker(client *registry.Client) ProvenanceChecker {
+	return &SLSAProvenanceChecker{client: client}
 }
 
 // Known SLSA predicate type prefixes.
@@ -28,7 +32,7 @@ var slsaPredicates = []string{
 }
 
 func (c *SLSAProvenanceChecker) Check(ctx context.Context, imageRef string) (*report.ProvenanceInfo, error) {
-	manifests, err := referrerManifests(ctx, imageRef)
+	manifests, err := referrerManifests(ctx, c.client, imageRef)
 	if err != nil {
 		return &report.ProvenanceInfo{}, nil
 	}
@@ -46,7 +50,7 @@ func (c *SLSAProvenanceChecker) Check(ctx context.Context, imageRef string) (*re
 
 	// BuildKit stores SLSA provenance as an attestation manifest embedded in
 	// the image index (unknown/unknown), not as a referrer, so check there too.
-	for _, pt := range indexAttestationPredicateTypes(ctx, imageRef) {
+	for _, pt := range indexAttestationPredicateTypes(ctx, c.client, imageRef) {
 		if isSLSAPredicate(pt) {
 			return &report.ProvenanceInfo{
 				HasProvenance: true,

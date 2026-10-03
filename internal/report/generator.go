@@ -2,7 +2,9 @@ package report
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 )
@@ -59,6 +61,8 @@ type GeneratorConfig struct {
 	CheckUpdates     bool
 	ClusterName      string
 	Concurrency      int
+	// Now stamps metadata.generatedAt. Nil means time.Now.
+	Now func() time.Time
 }
 
 // Generator orchestrates image/helm discovery and enrichment into a report.
@@ -102,10 +106,18 @@ type ImageInput struct {
 }
 
 // Generate produces a ProvenanceReport from discovered images and helm releases.
-func (g *Generator) Generate(ctx context.Context, images []ImageInput, helmReleases []HelmSource, namespacesScanned []string) *ProvenanceReport {
+// warnings are carried into the report alongside any the generator adds
+// itself (failed digest resolution or update checks); they are sorted so the
+// output is deterministic.
+func (g *Generator) Generate(ctx context.Context, images []ImageInput, helmReleases []HelmSource, namespacesScanned []string, warnings ...string) *ProvenanceReport {
+	now := time.Now
+	if g.cfg.Now != nil {
+		now = g.cfg.Now
+	}
 	report := &ProvenanceReport{
 		Metadata: ReportMetadata{
-			GeneratedAt:       time.Now().UTC(),
+			SchemaVersion:     SchemaVersion,
+			GeneratedAt:       now().UTC(),
 			CollectorVersion:  Version,
 			ClusterName:       g.cfg.ClusterName,
 			NamespacesScanned: namespacesScanned,
@@ -114,6 +126,7 @@ func (g *Generator) Generate(ctx context.Context, images []ImageInput, helmRelea
 
 	// Process images with bounded concurrency
 	imageRecords := make([]ImageRecord, len(images))
+	imageWarnings := make([][]string, len(images))
 	sem := make(chan struct{}, g.cfg.Concurrency)
 	var wg sync.WaitGroup
 
@@ -124,13 +137,29 @@ func (g *Generator) Generate(ctx context.Context, images []ImageInput, helmRelea
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			record := g.processImage(ctx, input)
-			imageRecords[idx] = record
+			imageRecords[idx], imageWarnings[idx] = g.processImage(ctx, input)
 		}(i, img)
 	}
 	wg.Wait()
 
 	report.Images = imageRecords
+
+	// Images are often deployed by several workloads; report each problem once.
+	seenWarning := make(map[string]bool)
+	for _, w := range warnings {
+		seenWarning[w] = true
+	}
+	all := append([]string(nil), warnings...)
+	for _, ws := range imageWarnings {
+		for _, w := range ws {
+			if !seenWarning[w] {
+				seenWarning[w] = true
+				all = append(all, w)
+			}
+		}
+	}
+	sort.Strings(all)
+	report.Warnings = all
 
 	// Process Helm releases
 	for _, hr := range helmReleases {
@@ -151,7 +180,8 @@ func (g *Generator) Generate(ctx context.Context, images []ImageInput, helmRelea
 	return report
 }
 
-func (g *Generator) processImage(ctx context.Context, input ImageInput) ImageRecord {
+func (g *Generator) processImage(ctx context.Context, input ImageInput) (ImageRecord, []string) {
+	var warnings []string
 	record := ImageRecord{
 		Image:     input.Image,
 		Namespace: input.Namespace,
@@ -166,6 +196,7 @@ func (g *Generator) processImage(ctx context.Context, input ImageInput) ImageRec
 		digest, err := g.digestResolver.Resolve(ctx, input.Image)
 		if err != nil {
 			slog.Warn("failed to resolve digest", "image", input.Image, "error", err)
+			warnings = append(warnings, fmt.Sprintf("image %s: digest not resolved: %v", input.Image, err))
 		} else {
 			record.Digest = digest
 		}
@@ -176,6 +207,7 @@ func (g *Generator) processImage(ctx context.Context, input ImageInput) ImageRec
 		update, err := g.updateChecker.Check(ctx, input.Image)
 		if err != nil {
 			slog.Warn("failed to check updates", "image", input.Image, "error", err)
+			warnings = append(warnings, fmt.Sprintf("image %s: update check failed: %v", input.Image, err))
 		} else if update != nil && update.UpdateAvailable {
 			record.Update = update
 		}
@@ -211,7 +243,7 @@ func (g *Generator) processImage(ctx context.Context, input ImageInput) ImageRec
 		}
 	}
 
-	return record
+	return record, warnings
 }
 
 func (g *Generator) computeSummary(r *ProvenanceReport) ReportSummary {

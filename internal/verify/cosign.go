@@ -12,6 +12,7 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/signature"
 
+	"github.com/nebari-dev/provenance-collector/internal/registry"
 	"github.com/nebari-dev/provenance-collector/internal/report"
 )
 
@@ -23,17 +24,19 @@ type SignatureVerifier interface {
 // CosignVerifier uses the cosign library to verify image signatures.
 type CosignVerifier struct {
 	publicKey string
+	client    *registry.Client
 }
 
 // NewSignatureVerifier creates a SignatureVerifier.
 // If publicKey is empty, it only checks for signature existence without
-// verifying the trust chain.
-func NewSignatureVerifier(publicKey string) SignatureVerifier {
-	return &CosignVerifier{publicKey: publicKey}
+// verifying the trust chain. client supplies registry auth and TLS settings
+// (nil means the defaults).
+func NewSignatureVerifier(publicKey string, client *registry.Client) SignatureVerifier {
+	return &CosignVerifier{publicKey: publicKey, client: client}
 }
 
 func (v *CosignVerifier) Verify(ctx context.Context, imageRef string) (*report.SignatureInfo, error) {
-	ref, err := name.ParseReference(imageRef)
+	ref, err := v.client.ParseReference(imageRef)
 	if err != nil {
 		return &report.SignatureInfo{
 			Error: fmt.Sprintf("invalid image reference: %v", err),
@@ -46,7 +49,7 @@ func (v *CosignVerifier) Verify(ctx context.Context, imageRef string) (*report.S
 	}
 
 	// Otherwise, just check for signature existence.
-	return v.checkExistence(ref)
+	return v.checkExistence(ctx, ref)
 }
 
 // verifyWithKey performs full key-based cosign signature verification.
@@ -76,6 +79,9 @@ func (v *CosignVerifier) verifyWithKey(ctx context.Context, ref name.Reference) 
 		SigVerifier: verifier,
 		IgnoreTlog:  true,
 		IgnoreSCT:   true,
+		RegistryClientOpts: []ociremote.Option{
+			ociremote.WithRemoteOptions(v.client.RemoteOptions(ctx)...),
+		},
 	}
 
 	sigs, _, err := cosign.VerifyImageSignatures(ctx, ref, opts)
@@ -94,8 +100,8 @@ func (v *CosignVerifier) verifyWithKey(ctx context.Context, ref name.Reference) 
 
 // checkExistence checks whether any cosign signature exists for the image
 // without verifying against a specific key.
-func (v *CosignVerifier) checkExistence(ref name.Reference) (*report.SignatureInfo, error) {
-	se, err := ociremote.SignedEntity(ref)
+func (v *CosignVerifier) checkExistence(ctx context.Context, ref name.Reference) (*report.SignatureInfo, error) {
+	se, err := ociremote.SignedEntity(ref, ociremote.WithRemoteOptions(v.client.RemoteOptions(ctx)...))
 	if err != nil {
 		return &report.SignatureInfo{
 			Error: fmt.Sprintf("fetching signed entity: %v", err),

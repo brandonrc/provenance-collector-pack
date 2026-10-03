@@ -31,7 +31,7 @@ func TestIsSLSAPredicate(t *testing.T) {
 }
 
 func TestNewProvenanceChecker(t *testing.T) {
-	c := NewProvenanceChecker()
+	c := NewProvenanceChecker(nil)
 	if c == nil {
 		t.Fatal("expected non-nil checker")
 	}
@@ -41,7 +41,7 @@ func TestNewProvenanceChecker(t *testing.T) {
 }
 
 func TestSLSAProvenanceChecker_InvalidRef(t *testing.T) {
-	c := NewProvenanceChecker()
+	c := NewProvenanceChecker(nil)
 	info, err := c.Check(context.Background(), ":::invalid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -52,7 +52,7 @@ func TestSLSAProvenanceChecker_InvalidRef(t *testing.T) {
 }
 
 func TestSLSAProvenanceChecker_UnreachableImage(t *testing.T) {
-	c := NewProvenanceChecker()
+	c := NewProvenanceChecker(nil)
 	// Non-existent image — registry call will fail, should return empty (not error)
 	info, err := c.Check(context.Background(), "localhost:1/nonexistent:v0.0.0")
 	if err != nil {

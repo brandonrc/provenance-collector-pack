@@ -58,7 +58,7 @@ func TestPredicateTypes(t *testing.T) {
 }
 
 func TestReferrerManifests_InvalidRef(t *testing.T) {
-	got, err := referrerManifests(context.Background(), ":::invalid")
+	got, err := referrerManifests(context.Background(), nil, ":::invalid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

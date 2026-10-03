@@ -2,12 +2,12 @@ package verify
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+
+	"github.com/nebari-dev/provenance-collector/internal/registry"
 )
 
 // Annotation keys that carry the in-toto predicate type of a referring
@@ -35,24 +35,22 @@ const (
 // Every failure (bad ref, unreachable registry, no referrers tag) returns an
 // empty slice and a nil error: a missing referrers index is the common case,
 // not an error worth surfacing to the caller.
-func referrerManifests(ctx context.Context, imageRef string) ([]v1.Descriptor, error) {
-	ref, err := name.ParseReference(imageRef)
+func referrerManifests(ctx context.Context, client *registry.Client, imageRef string) ([]v1.Descriptor, error) {
+	ref, err := client.ParseReference(imageRef)
 	if err != nil {
 		return nil, nil
 	}
 
-	desc, err := remote.Get(ref, remote.WithContext(ctx))
+	opts := client.RemoteOptions(ctx)
+	desc, err := remote.Get(ref, opts...)
 	if err != nil {
 		return nil, nil
 	}
 
 	referrersTag := strings.Replace(desc.Digest.String(), ":", "-", 1)
-	referrersRef, err := name.ParseReference(fmt.Sprintf("%s:%s", ref.Context().String(), referrersTag))
-	if err != nil {
-		return nil, nil
-	}
+	referrersRef := ref.Context().Tag(referrersTag)
 
-	idx, err := remote.Index(referrersRef, remote.WithContext(ctx))
+	idx, err := remote.Index(referrersRef, opts...)
 	if err != nil {
 		return nil, nil
 	}
@@ -102,13 +100,14 @@ func predicateTypes(d v1.Descriptor) []string {
 //
 // Every failure returns an empty slice: a single-arch image (no index) or an
 // image without attestations is the common case, not an error worth surfacing.
-func indexAttestationPredicateTypes(ctx context.Context, imageRef string) []string {
-	ref, err := name.ParseReference(imageRef)
+func indexAttestationPredicateTypes(ctx context.Context, client *registry.Client, imageRef string) []string {
+	ref, err := client.ParseReference(imageRef)
 	if err != nil {
 		return nil
 	}
 
-	desc, err := remote.Get(ref, remote.WithContext(ctx))
+	opts := client.RemoteOptions(ctx)
+	desc, err := remote.Get(ref, opts...)
 	if err != nil || !desc.MediaType.IsIndex() {
 		return nil
 	}
@@ -128,7 +127,7 @@ func indexAttestationPredicateTypes(ctx context.Context, imageRef string) []stri
 			continue
 		}
 		attRef := ref.Context().Digest(m.Digest.String())
-		img, err := remote.Image(attRef, remote.WithContext(ctx))
+		img, err := remote.Image(attRef, opts...)
 		if err != nil {
 			continue
 		}

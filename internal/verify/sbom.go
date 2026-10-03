@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
 	ociremote "github.com/sigstore/cosign/v2/pkg/oci/remote"
 
+	"github.com/nebari-dev/provenance-collector/internal/registry"
 	"github.com/nebari-dev/provenance-collector/internal/report"
 )
 
@@ -17,18 +17,21 @@ type SBOMDiscoverer interface {
 }
 
 // OCISBOMDiscoverer looks for SBOM attestations in OCI registries.
-type OCISBOMDiscoverer struct{}
+type OCISBOMDiscoverer struct {
+	client *registry.Client
+}
 
 // NewSBOMDiscoverer creates an SBOMDiscoverer that checks OCI registries.
-func NewSBOMDiscoverer() SBOMDiscoverer {
-	return &OCISBOMDiscoverer{}
+// client supplies registry auth and TLS settings (nil means the defaults).
+func NewSBOMDiscoverer(client *registry.Client) SBOMDiscoverer {
+	return &OCISBOMDiscoverer{client: client}
 }
 
 func (d *OCISBOMDiscoverer) Discover(ctx context.Context, imageRef string) (*report.SBOMInfo, error) {
 	// Path 1: the OCI referrers fallback tag. Cosign/sigstore bundle-format
 	// SBOM attestations land here as referring manifests, advertising their
 	// format through the in-toto predicate type on the descriptor.
-	if info := discoverFromReferrers(ctx, imageRef); info != nil {
+	if info := discoverFromReferrers(ctx, d.client, imageRef); info != nil {
 		return info, nil
 	}
 
@@ -38,13 +41,13 @@ func (d *OCISBOMDiscoverer) Discover(ctx context.Context, imageRef string) (*rep
 	// on the attestation manifest's layers. This is the common case and the
 	// referrers path above cannot see it. provenance.go checks the same place
 	// so the two stay in lock-step.
-	if info := discoverFromIndexAttestations(ctx, imageRef); info != nil {
+	if info := discoverFromIndexAttestations(ctx, d.client, imageRef); info != nil {
 		return info, nil
 	}
 
 	// Path 3: the legacy cosign attestation tag (sha256-<hex>.att) produced
 	// by older `cosign attest` runs that predate the referrers/bundle format.
-	if info := discoverFromCosignAtt(imageRef); info != nil {
+	if info := discoverFromCosignAtt(ctx, d.client, imageRef); info != nil {
 		return info, nil
 	}
 
@@ -54,8 +57,8 @@ func (d *OCISBOMDiscoverer) Discover(ctx context.Context, imageRef string) (*rep
 // discoverFromReferrers looks for an SBOM attestation in the image's OCI
 // referrers index. Returns nil when no SBOM-typed referrer is found, so the
 // caller can fall through to the later paths.
-func discoverFromReferrers(ctx context.Context, imageRef string) *report.SBOMInfo {
-	manifests, err := referrerManifests(ctx, imageRef)
+func discoverFromReferrers(ctx context.Context, client *registry.Client, imageRef string) *report.SBOMInfo {
+	manifests, err := referrerManifests(ctx, client, imageRef)
 	if err != nil {
 		return nil
 	}
@@ -73,8 +76,8 @@ func discoverFromReferrers(ctx context.Context, imageRef string) *report.SBOMInf
 // attestation manifests embedded in the image index. Returns nil when no
 // SBOM-typed predicate is found, so the caller can fall through to the legacy
 // path.
-func discoverFromIndexAttestations(ctx context.Context, imageRef string) *report.SBOMInfo {
-	for _, pt := range indexAttestationPredicateTypes(ctx, imageRef) {
+func discoverFromIndexAttestations(ctx context.Context, client *registry.Client, imageRef string) *report.SBOMInfo {
+	for _, pt := range indexAttestationPredicateTypes(ctx, client, imageRef) {
 		if format := sbomFormatFromPredicate(pt); format != "" {
 			return &report.SBOMInfo{HasSBOM: true, Format: format}
 		}
@@ -84,13 +87,13 @@ func discoverFromIndexAttestations(ctx context.Context, imageRef string) *report
 
 // discoverFromCosignAtt looks for an SBOM in the legacy cosign attestation tag.
 // Returns nil when nothing usable is found.
-func discoverFromCosignAtt(imageRef string) *report.SBOMInfo {
-	ref, err := name.ParseReference(imageRef)
+func discoverFromCosignAtt(ctx context.Context, client *registry.Client, imageRef string) *report.SBOMInfo {
+	ref, err := client.ParseReference(imageRef)
 	if err != nil {
 		return nil
 	}
 
-	se, err := ociremote.SignedEntity(ref)
+	se, err := ociremote.SignedEntity(ref, ociremote.WithRemoteOptions(client.RemoteOptions(ctx)...))
 	if err != nil {
 		return nil
 	}

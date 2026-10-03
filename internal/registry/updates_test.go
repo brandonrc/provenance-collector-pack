@@ -81,7 +81,7 @@ func TestShouldFlag(t *testing.T) {
 }
 
 func TestNewUpdateChecker_DefaultLevel(t *testing.T) {
-	c := NewUpdateChecker(false, "")
+	c := NewUpdateChecker(false, "", nil)
 	rc := c.(*RegistryUpdateChecker)
 	if rc.updateLevel != UpdateLevelPatch {
 		t.Errorf("expected default level %q, got %q", UpdateLevelPatch, rc.updateLevel)
@@ -89,7 +89,7 @@ func TestNewUpdateChecker_DefaultLevel(t *testing.T) {
 }
 
 func TestNewUpdateChecker_SkipPrerelease(t *testing.T) {
-	c := NewUpdateChecker(true, "minor")
+	c := NewUpdateChecker(true, "minor", nil)
 	rc := c.(*RegistryUpdateChecker)
 	if !rc.skipPrerelease {
 		t.Error("expected skipPrerelease=true")
