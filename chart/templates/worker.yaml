@@ -1,3 +1,4 @@
+{{- include "provenance-collector.compat.validate" . }}
 {{/*
   worker - inventory + mirror + scan (trivy client, grype, clairctl) +
   scheduler. Exactly one replica (APScheduler + Postgres-as-queue), Recreate

@@ -72,7 +72,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -211,7 +211,7 @@
                         "root_selector": "images",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -539,7 +539,7 @@
                         "root_selector": "helmReleases",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -639,7 +639,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -732,7 +732,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -825,7 +825,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -918,7 +918,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -1011,7 +1011,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -1100,7 +1100,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -1194,7 +1194,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }
@@ -1319,7 +1319,7 @@
                         "root_selector": "",
                         "source": "url",
                         "type": "json",
-                        "url": "http://provenance-collector-web.provenance-system.svc:8080/api/reports/latest",
+                        "url": "http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest",
                         "url_options": {
                           "method": "GET"
                         }

@@ -1,36 +1,45 @@
-# Standalone deployment — no nebari-operator required.
+# Standalone deployment — no nebari-operator, gateway or Keycloak required.
 #
 # Deploy with:
+#   helm dependency build chart/
 #   helm install provenance-collector chart/ \
 #     -f examples/standalone-values.yaml \
 #     --namespace provenance-system --create-namespace
+# Then:
+#   kubectl port-forward -n provenance-system svc/provenance-collector-ui 8080:80
+#   open http://localhost:8080
+#
+# WARNING: auth.mode=disabled means the API performs NO authentication: anyone
+# who can reach the ui Service is an admin. Keep it on a trusted network or
+# put your own authenticating proxy in front and use auth.mode=oidc.
 
-# Run daily at 6 AM UTC.
-schedule: "0 6 * * *"
+clusterName: my-cluster
 
-config:
-  # Scan all namespaces (default).
-  namespaces: []
-  excludeNamespaces: []
+auth:
+  mode: disabled
+
+scanner:
+  intervalHours: 24
+  excludedNamespaces: []
+  # No in-cluster registry to mirror into: scan images in place.
+  mirror:
+    enabled: false
+
+provenance:
+  engine: collector
   verifySignatures: true
-  helmEnabled: true
   checkUpdates: true
-  reportPath: /reports
-  clusterName: my-cluster
+  helmReleases:
+    enabled: true
+  compat:
+    internalService:
+      enabled: true
+      allowedNamespaces:
+        - monitoring
 
-persistence:
-  # http: collector POSTs reports to the dashboard's internal endpoint.
-  # The dashboard owns the PVC; no shared volume between pods. Works on
-  # ReadWriteOnce storage classes like Hetzner csi.hetzner.cloud.
-  mode: http
-  storageClass: ""  # Optional, but recommended (uses the cluster default if empty).
-  size: 1Gi
+networkPolicy:
+  # The default policy only admits the gateway namespace to the ui.
+  enabled: false
 
-# webUI is required in http mode — it hosts both the read API/UI and the
-# internal upload endpoint the collector POSTs to.
-webUI:
-  enabled: true
-
-# No Nebari integration.
 nebariapp:
   enabled: false

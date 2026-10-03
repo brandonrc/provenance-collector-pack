@@ -1,4 +1,5 @@
-{{ include "security-posture.fullname" . }} (Security Posture pack {{ .Chart.AppVersion }}) has been deployed to namespace {{ .Release.Namespace }}.
+{{- include "provenance-collector.compat.validate" . }}
+{{ include "security-posture.fullname" . }} (Security Posture pack, chart {{ .Chart.Name }} {{ .Chart.Version }}) has been deployed to namespace {{ .Release.Namespace }}.
 
 Components: ui, api, worker{{ if .Values.scanner.trivy.enabled }}, trivy{{ end }}{{ if .Values.scanner.clair.enabled }}, clair{{ end }}{{ if .Values.postgresql.enabled }}, postgres{{ end }}
 Enabled scanners: {{ include "security-posture.enabledScanners" . }}
@@ -40,4 +41,19 @@ the Keycloak realm issuer URL(s) (internal and external).
 {{- if eq .Values.auth.mode "disabled" }}
 
 WARNING: auth.mode=disabled - the API performs NO authentication. Development only.
+{{- end }}
+{{- with include "provenance-collector.compat.aliased" . }}
+
+DEPRECATED: provenance-collector-pack <= 0.1.x values applied as aliases:
+  {{ . }}
+Move them to provenance.* / scanner.excludedNamespaces / clusterName
+(docs: migrating). They will be removed in a future release.
+{{- end }}
+{{- with include "provenance-collector.compat.ignored" . }}
+
+IGNORED: provenance-collector-pack <= 0.1.x values with no equivalent:
+  {{ . }}
+The CronJob, Go dashboard and standalone frontend are no longer deployed; the
+UI is the ui component and Grafana reads <fullname>-web-internal
+(provenance.compat.internalService.enabled).
 {{- end }}

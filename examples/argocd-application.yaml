@@ -1,5 +1,6 @@
-# ArgoCD Application for deploying provenance-collector from the Nebari Helm
-# repository. Update repoURL and targetRevision once the chart is published.
+# ArgoCD Application for deploying the Security Posture pack (chart
+# provenance-collector) from the Nebari Helm repository. Update repoURL and
+# targetRevision once the chart is published.
 #
 # The target namespace must have the label:
 #   nebari.dev/managed=true
@@ -10,24 +11,31 @@ metadata:
   name: provenance-collector
   namespace: argocd
 spec:
-  project: default
+  # Software packs run under the `nebari-apps` project on NIC >= v0.10.0.
+  project: nebari-apps
   source:
     repoURL: https://nebari-dev.github.io/helm-repository
     chart: provenance-collector
-    targetRevision: "0.1.4"  # Pin to a released version.
+    targetRevision: "0.2.0"  # Pin to a released version.
     helm:
       valuesObject:
-        config:
-          clusterName: my-cluster
+        clusterName: my-cluster
+        adminGroups:
+          - admin
+        auth:
+          issuers:
+            - https://keycloak.example.com/auth/realms/nebari
+            - http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+        scanner:
+          intervalHours: 24
+        provenance:
           verifySignatures: true
-          helmEnabled: true
           checkUpdates: true
-
-        persistence:
-          mode: http  # http | pvc | configmap (see chart/values.yaml)
-
-        webUI:
-          enabled: true
+          helmReleases:
+            enabled: true
+          compat:
+            internalService:
+              enabled: true
 
         nebariapp:
           enabled: true

@@ -1,6 +1,13 @@
-# Grace (single-node MicroK8s) overrides for nebari-security-posture-pack.
-# Used by deploy/grace/deploy.sh, which also --set's the image tags to the
-# tag produced by build-push.sh.
+# Grace (single-node MicroK8s) overrides for the Security Posture pack
+# (chart provenance-collector). Used by deploy/grace/deploy.sh, which also
+# --set's the image tags to the tag produced by build-push.sh.
+
+# The release was first installed from the chart when it was named
+# nebari-security-posture-pack. Keeping that as nameOverride keeps every
+# resource name (fullname collapses to "security-posture"), the
+# app.kubernetes.io/name selector labels (immutable on Deployments and
+# StatefulSets) and the PVCs unchanged across the chart rename.
+nameOverride: nebari-security-posture-pack
 
 images:
   api:

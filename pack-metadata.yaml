@@ -11,9 +11,20 @@
 #   pip install check-jsonschema
 #   check-jsonschema --schemafile <path-to>/pack-metadata.schema.json pack-metadata.yaml
 
+# NOTE: `name` must equal the GitHub repo name exactly. The repo keeps its
+# name for now; the pack is the Security Posture pack (provenance collector +
+# security posture merge, docs/proposals/0001-merge-with-provenance-collector-pack.md).
 name: provenance-collector-pack
-display_name: Provenance Collector
-level: alpha
+display_name: Security Posture
+description: >-
+  Admin-only cluster security posture for Nebari: supply-chain provenance for
+  every running image (Go provenance collector: signatures, SBOM and SLSA
+  attestations, updates, Helm releases), Trivy + Grype + Clair consensus
+  scanning, Kubernetes STIG posture checks, live NIST SP 800-53 control
+  assertions, and POA&M / STIG checklist / SAR / OSCAL reports.
+# The merged pack re-enters at experimental until the integration test covers
+# the combined chart (proposal 0001, "Maturity").
+level: experimental
 owner: viniciusdc
 deprecated: false
 product_owner: null
@@ -24,7 +35,17 @@ docs_site: true
 
 nebariapp_integration: full
 scope:
+  # Installs without the operator with nebariapp.enabled=false
+  # (examples/standalone-values.yaml). Bundles its own Postgres, Trivy server
+  # and Clair.
   standalone-supported: yes
+
+demo_notes: |
+  Admin-gated three ways: NebariApp auth.groups (enforced at the gateway on
+  operators that support it), an optional chart-rendered Envoy SecurityPolicy
+  (adminGate.securityPolicy.enabled), and in-API JWT + group verification.
+  Grafana keeps reading the provenance report at
+  <release>-web-internal:8080/api/reports/latest.
 
 links:
   docs: https://packs.nebari.dev/provenance-collector-pack/

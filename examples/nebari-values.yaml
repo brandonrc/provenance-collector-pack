@@ -1,66 +1,69 @@
-# Nebari deployment — requires the nebari-operator, Envoy Gateway, and Keycloak.
+# Nebari deployment — requires the nebari-operator, Envoy Gateway and Keycloak.
 #
 # The target namespace must have the label:
 #   nebari.dev/managed=true
 #
 # Deploy with:
+#   helm dependency build chart/
 #   helm install provenance-collector chart/ \
 #     -f examples/nebari-values.yaml \
 #     --namespace provenance-system --create-namespace
+#
+# Migrating from provenance-collector-pack <= 0.1.x: see
+# docs/src/content/docs/migrating.md. `schedule`, `persistence.mode` and
+# `frontend.keycloak.url` are retired (the render fails with a pointer);
+# `config.*` keys are still accepted as aliases of `provenance.*`.
 
-schedule: "0 6 * * *"
+clusterName: ""  # Set to your cluster name (report metadata).
 
-config:
-  namespaces: []
-  excludeNamespaces: []
+# Keycloak groups allowed to use the pack (gateway + API). The UI and every
+# API route, including /api/reports*, are admin-only.
+adminGroups:
+  - admin
+
+auth:
+  mode: oidc
+  # Accepted token issuers: the public realm URL the browser sees and the
+  # in-cluster one. Required: an empty list rejects every token.
+  issuers:
+    - https://keycloak.example.com/auth/realms/nebari  # Replace.
+    - http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+
+scanner:
+  # Was `schedule: "0 6 * * *"` (daily CronJob).
+  intervalHours: 24
+  # Was config.excludeNamespaces.
+  excludedNamespaces: []
+
+# Supply-chain provenance (was config.*). The worker runs the Go
+# provenance-collector once per scan and ingests its report.
+provenance:
+  engine: collector
   verifySignatures: true
-  helmEnabled: true
+  checkSBOM: true
+  checkProvenance: true
   checkUpdates: true
-  reportPath: /reports
-  clusterName: ""  # Set to your cluster name.
+  updateLevel: patch
+  helmReleases:
+    # Was config.helmEnabled (default true there). Grants cluster-wide Secrets
+    # get/list to the worker's ServiceAccount.
+    enabled: true
+  compat:
+    internalService:
+      # Unauthenticated /api/reports* for Grafana (examples/grafana-dashboard.json):
+      #   http://provenance-collector-web-internal.provenance-system.svc:8080/api/reports/latest
+      enabled: true
+      allowedNamespaces:
+        - monitoring
 
 persistence:
-  # http mode is the safe default: only the dashboard pod mounts the volume,
-  # so a ReadWriteOnce class (e.g. Hetzner csi.hetzner.cloud) is fine.
-  mode: http
-  storageClass: ""
-  size: 1Gi
+  storageClass: ""  # "" = cluster default.
 
-# Required in http mode — hosts UI + internal upload endpoint.
-webUI:
-  enabled: true
-
-# Register with the nebari-operator and expose the public UI through the gateway.
-# The internal upload Service ({fullname}-web-internal) is intentionally not
-# routed here: it must stay cluster-only.
+# Register with the nebari-operator and expose the UI through the gateway.
+# The compat Service (<fullname>-web-internal) is never routed by the gateway.
 nebariapp:
   enabled: true
   hostname: provenance.example.com  # Replace with your hostname.
-  service:
-    port: 8080
-  routing:
-    tls:
-      enabled: true
-  auth:
-    enabled: true
-    provider: keycloak
-    provisionClient: true
-    enforceAtGateway: true
-    redirectURI: /oauth2/callback
-    scopes:
-      - openid
-      - profile
-      - email
-      - groups
-    groups: []  # Restrict access to specific groups if needed.
   landingPage:
     enabled: true
-    displayName: "Provenance Collector"
-    description: "Container image provenance and compliance reports"
-    category: "Platform"
-    priority: 10
-    healthCheck:
-      enabled: true
-      path: /healthz
-      intervalSeconds: 30
-      timeoutSeconds: 5
+    displayName: Security Posture

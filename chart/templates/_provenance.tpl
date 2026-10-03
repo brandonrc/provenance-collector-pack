@@ -3,7 +3,7 @@ Supply-chain provenance env (DESIGN §12), shared by api (settings defaults,
 compat listener) and worker (checks). Keys: values.yaml `provenance:`.
 */}}
 {{- define "security-posture.provenanceEnv" -}}
-{{- $p := .Values.provenance }}
+{{- $p := include "provenance-collector.compat.provenance" . | fromJson }}
 - name: PROVENANCE_ENABLED
   value: {{ $p.enabled | quote }}
 - name: PROVENANCE_VERIFY_SIGNATURES
@@ -34,6 +34,8 @@ compat listener) and worker (checks). Keys: values.yaml `provenance:`.
   value: {{ $p.helmReleases.enabled | quote }}
 - name: PROVENANCE_HELM_CHART_REPOS
   value: {{ join "," ($p.helmReleases.chartRepos | default list) | quote }}
+- name: PROVENANCE_ENGINE
+  value: {{ $p.engine | default "collector" | quote }}
 {{- end }}
 
 {{/* Name of the unauthenticated compat Service (Grafana). */}}

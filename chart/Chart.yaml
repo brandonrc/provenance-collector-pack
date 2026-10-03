@@ -1,23 +1,38 @@
 apiVersion: v2
-name: nebari-security-posture-pack
+# The chart keeps the name it was published under by provenance-collector-pack
+# (nebari-dev/helm-repository: provenance-collector) so existing ArgoCD
+# Applications and `helm upgrade` keep working. The pack is now the Security
+# Posture pack: provenance is one of four evidence layers.
+name: provenance-collector
 description: >-
-  Admin-only Nebari software pack that inventories every container in the
-  cluster, scans each image with Trivy, Grype and Clair, audits workload
-  configuration, and presents a single Security Posture rating.
+  Nebari Security Posture pack (formerly Provenance Collector): inventories every
+  running container, records supply-chain provenance (signatures, SBOM and SLSA
+  attestations, updates, Helm releases) with the Go provenance collector, scans
+  each image with Trivy, Grype and Clair, audits workload configuration against
+  the Kubernetes STIG, runs live NIST SP 800-53 control assertions, and
+  generates POA&M, STIG checklist, SAR and OSCAL reports. Admin-only.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - nebari
   - security
+  - provenance
+  - compliance
+  - sbom
+  - cosign
+  - supply-chain
   - vulnerability
   - trivy
   - grype
   - clair
-home: https://github.com/geraci/nebari-security-posture-pack
+  - oscal
+home: https://github.com/nebari-dev/provenance-collector-pack
 sources:
-  - https://github.com/geraci/nebari-security-posture-pack
+  - https://github.com/nebari-dev/provenance-collector-pack
 maintainers:
+  - name: nebari-dev
+    url: https://github.com/nebari-dev
   - name: geraci
 dependencies:
   - name: nebari-app

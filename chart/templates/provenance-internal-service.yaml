@@ -16,8 +16,7 @@ metadata:
   name: {{ include "security-posture.provenanceInternalServiceName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
-    app.kubernetes.io/component: web-internal
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "web-internal") | nindent 4 }}
 spec:
   type: ClusterIP
   ports:

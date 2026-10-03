@@ -6,9 +6,11 @@ Expand the name of the chart.
 {{- end }}
 
 {{/*
-Fully qualified app name. Release "security-posture" + chart
-"nebari-security-posture-pack" collapses to just the release name (either
-contains the other), keeping derived names short: the operator-provisioned
+Fully qualified app name. A release whose name contains the chart name (or
+nameOverride), or vice versa, collapses to just the release name: release
+"provenance-collector" + chart "provenance-collector" -> "provenance-collector"
+(the <= 0.1.x names), release "security-posture" + nameOverride
+"nebari-security-posture-pack" -> "security-posture". Keeps derived names short: the operator-provisioned
 Keycloak client id is "<namespace>-<fullname>" and every component appends a
 suffix ("-postgres", "-trivy", ...).
 */}}
@@ -42,7 +44,7 @@ helm.sh/chart: {{ include "security-posture.chart" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-app.kubernetes.io/part-of: nebari-security-posture-pack
+app.kubernetes.io/part-of: provenance-collector-pack
 {{- end }}
 
 {{/*
@@ -308,7 +310,11 @@ Environment shared by api and worker (DESIGN.md section 5).
 - name: RESCAN_AFTER_HOURS
   value: {{ .Values.scanner.rescanAfterHours | quote }}
 - name: EXCLUDED_NAMESPACES
-  value: {{ join "," .Values.scanner.excludedNamespaces | quote }}
+  value: {{ include "provenance-collector.compat.excludedNamespaces" . | quote }}
+{{- with include "provenance-collector.compat.clusterName" . }}
+- name: CLUSTER_NAME
+  value: {{ . | quote }}
+{{- end }}
 - name: LOG_LEVEL
   value: {{ .Values.logLevel | quote }}
 - name: REPORTS_DIR

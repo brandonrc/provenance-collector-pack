@@ -1,4 +1,10 @@
-# Default values for nebari-security-posture-pack.
+# Default values for the provenance-collector chart (Security Posture pack).
+#
+# provenance-collector-pack <= 0.1.x values (`config.*`, `schedule`,
+# `persistence.mode`, `webUI.*`, `frontend.*`) are handled by
+# templates/_compat.tpl: `config.*` keys are aliases of `provenance.*`, retired
+# keys fail the render with a pointer to their replacement. See
+# docs/src/content/docs/migrating.md.
 #
 # Contract: docs/DESIGN.md (sections 3, 5, 8). Every component runs in the
 # release namespace. The namespace MUST carry `nebari.dev/managed: "true"`
@@ -15,19 +21,20 @@
 # images are pinned. A non-empty `digest` (sha256:...) wins over `tag`.
 images:
   api:
-    repository: quay.io/nebari/nebari-security-posture-pack-api
-    tag: "0.1.0"
+    repository: quay.io/nebari/provenance-collector-pack-api
+    tag: "0.2.0"
     digest: ""
     pullPolicy: IfNotPresent
   worker:
-    # api image + trivy, grype, clairctl and skopeo binaries.
-    repository: quay.io/nebari/nebari-security-posture-pack-worker
-    tag: "0.1.0"
+    # api image + trivy, grype, clairctl, cosign, skopeo and the Go
+    # provenance-collector binary (collector/).
+    repository: quay.io/nebari/provenance-collector-pack-worker
+    tag: "0.2.0"
     digest: ""
     pullPolicy: IfNotPresent
   ui:
-    repository: quay.io/nebari/nebari-security-posture-pack-ui
-    tag: "0.1.0"
+    repository: quay.io/nebari/provenance-collector-pack-ui
+    tag: "0.2.0"
     digest: ""
     pullPolicy: IfNotPresent
   trivy:
@@ -164,6 +171,10 @@ extraCACerts:
 
 logLevel: info
 
+# Cluster name in report metadata (compat report `metadata.clusterName`, OSCAL
+# system name default). Theirs: config.clusterName. "" = "nebari".
+clusterName: ""
+
 # Compliance reports (DESIGN §11).
 reports:
   # Where report files are written (PVC persistence.reports when persistence is
@@ -190,6 +201,14 @@ reports:
 # (Settings page / PUT /api/v1/settings `provenance`).
 provenance:
   enabled: true
+  # Which implementation runs the checks:
+  #   collector - the Go provenance-collector binary bundled in the worker image
+  #               (collector/), run once per scan; its JSON report is ingested.
+  #               Images it could not resolve (registry unreachable from the
+  #               pod, e.g. node-local registry aliases) fall back to python.
+  #   python    - the worker's built-in checks (also the fallback when the
+  #               binary is missing or fails).
+  engine: collector
   # Check cosign signatures (theirs: config.verifySignatures). Without a key or
   # keyless identity below this is an existence check (signed, not verified).
   verifySignatures: true
