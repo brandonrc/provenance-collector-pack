@@ -87,6 +87,40 @@ describe('Compliance & reports', () => {
     expect(screen.getByRole('button', { name: /Run assertions/ })).toBeEnabled();
   });
 
+  it('uses baseline numbers on every tile, with the full catalog in a tooltip', async () => {
+    const totals = {
+      baseline: { name: 'moderate', total: 287, implemented: 20, partial: 6, notImplemented: 62, inherited: 199, notApplicable: 0, unknown: 0 },
+      catalog: { total: 292, implemented: 20, partial: 6, notImplemented: 64, inherited: 200, notApplicable: 0, unknown: 2 },
+    };
+    server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
+    const user = userEvent.setup();
+    renderApp('/compliance');
+    const impl = await screen.findByTestId('tile-implemented');
+    await waitFor(() => expect(impl).toHaveTextContent('20/287'));
+    expect(impl).toHaveTextContent('Implemented (moderate baseline)');
+    const ni = screen.getByTestId('tile-not-implemented');
+    expect(ni).toHaveTextContent('Not implemented (moderate baseline)');
+    expect(ni).toHaveTextContent('62');
+    expect(ni).toHaveTextContent('of 287 moderate baseline controls');
+    expect(ni).not.toHaveTextContent('292');
+    expect(screen.getByTestId('tile-unknown')).toHaveTextContent(/^Unknown \(moderate baseline\)0of 287/);
+    await user.hover(within(ni).getByText('of 287 moderate baseline controls'));
+    expect(await screen.findByText('Full catalog: 64 not implemented of 292 controls (incl. 5 outside the baseline)')).toBeInTheDocument();
+  });
+
+  it('shows the same baseline numbers on the Overview controls tile', async () => {
+    const totals = {
+      baseline: { name: 'moderate', total: 287, implemented: 20, partial: 6, notImplemented: 62, inherited: 199, notApplicable: 0, unknown: 0 },
+      catalog: { total: 292, implemented: 20, partial: 6, notImplemented: 64, inherited: 200, notApplicable: 0, unknown: 2 },
+    };
+    server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
+    renderApp('/');
+    expect(await screen.findByRole('link', { name: 'Controls implemented 20 of 287 (moderate baseline)' })).toBeInTheDocument();
+    const line = screen.getByText(/62 not implemented/);
+    expect(line).toHaveTextContent('6 partial · 62 not implemented · 199 inherited · 0 unknown (moderate baseline)');
+    expect(line).toHaveAttribute('title', expect.stringContaining('Full catalog (292 controls)'));
+  });
+
   it('filters the catalog by family from the URL', async () => {
     renderApp('/compliance?family=SR');
     const table = await screen.findByRole('table', { name: 'Control catalog' });
@@ -120,6 +154,28 @@ describe('Supply chain', () => {
     await waitFor(() => expect(within(outdated).getAllByRole('row').length).toBeGreaterThan(5));
     expect(within(outdated).getAllByLabelText(/^major update available/).length).toBeGreaterThan(0);
     expect(within(await screen.findByRole('table', { name: 'Unsigned images' })).getAllByLabelText('Signature: unsigned').length).toBeGreaterThan(0);
+  });
+
+  it('leaves stale images out of the fallback tiles and the unsigned/outdated lists', async () => {
+    const base = { registry: 'r', repository: 'x', tags: [], digest: null, score: 50, grade: 'C', confidence: 'normal', counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }, fixable: {}, scanners: {}, agreementIndex: null, namespaces: ['app'], workloads: 1, containers: 1, lastScannedAt: null, mirrored: false, warnings: [] };
+    const unsigned = { signature: { signed: false, verified: false }, update: { currentTag: '1.0.0', newestAvailable: '2.0.0', updateAvailable: true } };
+    const items = [
+      { ...base, id: 'live', ref: 'ghcr.io/org/live:1.0.0', tag: '1.0.0', running: true, current: true, provenance: unsigned },
+      { ...base, id: 'job', ref: 'ghcr.io/org/job:1.0.0', tag: '1.0.0', running: false, current: true, provenance: { ...unsigned, signature: { signed: true, verified: true } } },
+      { ...base, id: 'old', ref: 'localhost:32000/old:1.0.0', tag: '1.0.0', running: false, current: false, provenance: unsigned },
+    ];
+    server.use(
+      http.get('*/api/v1/supply-chain', () => HttpResponse.json({ detail: 'not found' }, { status: 404 })),
+      // an API that ignores ?current=true: the page must still filter client-side
+      http.get('*/api/v1/images', () => HttpResponse.json({ items, total: items.length, page: 1, pageSize: 500 })),
+    );
+    renderApp('/supply-chain');
+    expect(await screen.findByText('1 of 2 images lack a verified cosign signature')).toBeInTheDocument();
+    expect(screen.getAllByText('1 of 2 images').length).toBeGreaterThan(0); // Signed / Verified tiles
+    const unsignedTable = screen.getByRole('table', { name: 'Unsigned images' });
+    expect(within(unsignedTable).getByText('ghcr.io/org/live:1.0.0')).toBeInTheDocument();
+    expect(within(unsignedTable).queryByText('localhost:32000/old:1.0.0')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('table', { name: 'Outdated images' })).queryByText('localhost:32000/old:1.0.0')).not.toBeInTheDocument();
   });
 
   it('shows signed / SBOM / provenance glyphs and update chips on the images table', async () => {

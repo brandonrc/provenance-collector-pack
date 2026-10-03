@@ -86,7 +86,8 @@ export interface Summary {
   lastScan: LastScan | null;
   counts: SeverityCounts;
   fixable: Partial<SeverityCounts>;
-  images: { total: number; scanned: number; failed: number };
+  /** The latest done scan's unique images (its `imagesTotal` on a full scan); `running` = with a Running pod. */
+  images: { total: number; scanned: number; failed: number; running?: number };
   workloads: number;
   namespaces: number;
   scanners: ScannerHealth[];
@@ -129,6 +130,8 @@ export interface ImageSummary {
   workloads: number;
   containers: number;
   running: boolean;
+  /** In the latest done scan's inventory; `false` = stale (no longer deployed), null before any scan. */
+  current?: boolean | null;
   lastScannedAt: string | null;
   mirrored: boolean;
   warnings: string[];
@@ -209,6 +212,9 @@ export interface SupplyChainSummary {
   helmWithUpdates: number;
   score: number | null;
   grade: Grade;
+  /** Images left out because they are not in the latest done scan (`?includeStale=true` adds them). */
+  stale?: number;
+  includeStale?: boolean;
 }
 
 /** `GET /helm-releases` (provenance-collector-pack `HelmRecord`). */
@@ -300,6 +306,8 @@ export interface ImageQuery {
   grade?: string;
   severity?: string;
   q?: string;
+  /** true = only images in the latest done scan, false = only stale ones. */
+  current?: boolean;
   sort?: string;
   order?: 'asc' | 'desc';
   page?: number;
@@ -554,11 +562,35 @@ export interface ControlCoverage {
   family?: string | null;
   /** lowest baseline containing the control (`low`…), or a list of baselines; null = not in a baseline. */
   baseline?: string | string[] | null;
+  /** In the selected baseline (§13 API); derived from `baseline` when absent. */
+  inBaseline?: boolean;
   components?: string[];
   assertions?: ControlAssertion[];
 }
 
-/** `GET /compliance/families`. */
+/** Control counts by status (`GET /compliance/families` `totals.*`). */
+export interface ComplianceTotals {
+  total: number;
+  implemented: number;
+  partial: number;
+  notImplemented: number;
+  inherited: number;
+  notApplicable: number;
+  unknown: number;
+}
+
+/**
+ * `GET /compliance/families`: per-family rollup of the selected baseline (`items`) plus
+ * totals for the baseline and for every control `GET /compliance/controls` lists (`catalog`).
+ * Older APIs return the bare `items` array.
+ */
+export interface FamiliesRollup {
+  baseline?: string;
+  items: FamilyRollup[];
+  totals?: { baseline: ComplianceTotals & { name?: string }; catalog: ComplianceTotals };
+}
+
+/** One family row of `GET /compliance/families`. */
 export interface FamilyRollup {
   family: string;
   title: string;
