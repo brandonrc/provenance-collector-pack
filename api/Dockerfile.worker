@@ -19,7 +19,7 @@ ARG COLLECTOR_VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
       -ldflags="-s -w -X github.com/nebari-dev/provenance-collector/internal/report.Version=${COLLECTOR_VERSION}" \
       -o /out/provenance-collector ./cmd/provenance-collector \
- && /out/provenance-collector --help 2>&1 | grep -q -- --once
+ && /out/provenance-collector --help 2>&1 | grep -q -- "-once"
 
 FROM ${PYTHON_IMAGE} AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
