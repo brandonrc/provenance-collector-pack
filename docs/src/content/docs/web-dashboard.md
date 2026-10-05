@@ -171,7 +171,7 @@ The SPA reads `/config.json` once at startup. The chart renders it from
 | Item | Value |
 |---|---|
 | Image | `ghcr.io/nebari-dev/provenance-collector-pack/frontend` (tag defaults to the chart's `appVersion`) |
-| Base | `nginxinc/nginx-unprivileged:1.27-alpine`, uid/gid 101 |
+| Base | `nginxinc/nginx-unprivileged:1.31-alpine-slim` (digest-pinned, `apk upgrade` at build), uid/gid 101 |
 | Port | `8080` (`NGINX_PORT`; chart: `frontend.port`) |
 | `/api/` upstream | `API_UPSTREAM` (`host:port`; chart: `<fullname>-web:<webUI.port>`). A bare Service name is qualified with the pod's `<ns>.svc.<cluster-domain>` search domain, and nginx re-resolves it every 30 s. The URI and all request headers, including `Authorization` and `Sec-Fetch-Site` (the `POST /api/scan` CSRF guard), are passed through unchanged. |
 | Writable paths | `/tmp` and `/var/cache/nginx` (emptyDirs in the chart); works with `readOnlyRootFilesystem: true` and `capabilities.drop: [ALL]` |

@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     gate; a new Playwright job runs against the mock bundles; the
     integration e2e specs (`test/e2e`) and the auto-captured screenshots
     (`docs/screenshots/dashboard-*-{light,dark}.png`) follow the new UI.
+  - Kept in sync with the posture pack's `ui/`: its SCAP / STIG views come
+    along but are posture-mode only (hidden, `/stig/*` redirects to `/`), and
+    the runtime image moves to `nginx-unprivileged:1.31-alpine-slim`, pinned by
+    digest, with `apk upgrade` at build.
 
 - Integration test migrated to `action-nebari-sandbox` v3, which provisions the
   sandbox through NIC's `local` (kind) provider instead of k3d + NIC's

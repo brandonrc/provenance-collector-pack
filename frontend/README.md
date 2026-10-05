@@ -14,7 +14,7 @@ runs in **provenance** mode.
 
 | Item | Value |
 |---|---|
-| Base image | `nginxinc/nginx-unprivileged:1.27-alpine` |
+| Base image | `nginxinc/nginx-unprivileged:1.31-alpine-slim` (digest-pinned, `apk upgrade` at build) |
 | User | uid/gid **101**; works with `runAsNonRoot`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]` |
 | Listen port | **8080** (`NGINX_PORT`) |
 | Writable paths | `/tmp` (pid, temp dirs, rendered server block in `/tmp/nginx/conf.d`) and `/var/cache/nginx`; mount emptyDirs there |
@@ -64,7 +64,8 @@ returns `{mode, features}`; the sidebar, routes and pages read it.
 
 In **provenance** mode only Overview, Images (+ detail), Supply chain, Reports and Scans exist.
 The posture-only pages (Vulnerabilities, Workloads, Namespaces, Posture checks, Compliance,
-Settings, scan detail) are compiled in but hidden, and their routes redirect to `/`. Their code
+Settings, scan detail, and the SCAP / STIG views: the image STIG tab, Product STIGs and
+`/stig/benchmarks/:id`) are compiled in but hidden, and their routes redirect to `/`. Their code
 paths are exercised only by the posture-mode unit tests and the `chromium` Playwright project.
 
 **Report adapter** (`src/api/provenance-adapter.ts`) maps the collector report
@@ -133,6 +134,19 @@ The end-to-end specs against a real dashboard live in `../test/e2e` (Integration
 into `../docs/screenshots/dashboard-*-{light,dark}.png` (both containers use `--network host`).
 The Integration Test workflow runs the same `screenshots/shoot.mjs` against the sandbox on every
 push to `main`.
+
+## Keeping in sync with the Security Posture pack
+
+`frontend/` here and `ui/` in
+[nebari-security-posture-pack](https://github.com/nebari-dev/nebari-security-posture-pack) are one
+codebase: copy a change made on either side to the other. `src/`, `playwright/` and `public/` must
+be identical; only the packaging differs (this README, the Dockerfile's labels and default
+`API_UPSTREAM`, `docker/05-security-posture.envsh`, `.node-version`, `screenshots/`, the package
+name). From a checkout of the posture pack next to this one:
+
+```sh
+ui/scripts/diff-upstream-frontend.sh ../provenance-collector-pack/frontend   # non-zero on drift
+```
 
 ## Design system
 
