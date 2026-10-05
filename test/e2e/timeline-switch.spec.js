@@ -12,7 +12,7 @@
 //     "traefik/whoami") that is absent from the older one.
 
 const { test, expect } = require('@playwright/test');
-const { BASE, shellReady, imagesTotal, gotoSection } = require('./helpers');
+const { BASE, shellReady, imagesSettled, imagesTotal, gotoSection } = require('./helpers');
 
 const NEW_IMAGE_MARKER = process.env.TIMELINE_NEW_IMAGE || 'traefik/whoami';
 
@@ -25,14 +25,21 @@ async function overviewUniqueImages(page) {
   return parseInt(m[1], 10);
 }
 
-// markerCount filters the Images table by the marker and returns the match count.
+// markerCount filters the Images table by the marker and returns the match count,
+// then clears the filter again. Each step waits for the page to render the new
+// filter (the "Clear filters" button follows the URL state), not just for the
+// URL, so the count is never read off the previous query's rows.
 async function markerCount(page) {
   const search = page.getByRole('searchbox', { name: 'Search images' }).or(page.getByLabel('Search images'));
+  const clearFilters = page.getByRole('button', { name: 'Clear filters' });
   await search.first().fill(NEW_IMAGE_MARKER);
   await expect(page).toHaveURL(/[?&]q=/);
+  await expect(clearFilters).toBeVisible();
   const n = await imagesTotal(page);
   await search.first().fill('');
   await expect(page).not.toHaveURL(/[?&]q=/);
+  await expect(clearFilters).toHaveCount(0);
+  await imagesSettled(page);
   return n;
 }
 
@@ -60,14 +67,23 @@ test('viewing an older report updates the Overview tiles AND the Images table', 
   expect(newestHasNewImage, `newest report must contain "${NEW_IMAGE_MARKER}"`).toBeGreaterThan(0);
 
   // --- Older report ---------------------------------------------------------
+  // Switching re-fetches the older report and invalidates every dataset query;
+  // pages keep showing the newest data until their refetch lands. Wait for the
+  // report itself, then poll the views until they show it.
   await gotoSection(page, 'Reports');
+  const olderReport = page.waitForResponse(
+    (r) => r.ok() && decodeURIComponent(new URL(r.url()).pathname).endsWith(`/api/reports/${olderFile}`),
+  );
   await page.getByRole('button', { name: `View report ${olderFile}` }).click();
   await expect(page.getByText('Viewing an earlier report')).toBeVisible();
 
   await gotoSection(page, 'Overview');
+  await olderReport;
+  await expect.poll(() => overviewUniqueImages(page), { message: 'Overview tiles should switch to the older report' }).toBeLessThan(newestStat);
   const olderStat = await overviewUniqueImages(page);
   await gotoSection(page, 'Images');
   await expect(page.getByText('Viewing an earlier report')).toBeVisible();
+  await expect.poll(() => imagesTotal(page), { message: 'Images table should switch to the older report' }).toBeLessThan(newestTotal);
   const olderTotal = await imagesTotal(page);
   const olderHasNewImage = await markerCount(page);
 
@@ -81,5 +97,5 @@ test('viewing an older report updates the Overview tiles AND the Images table', 
   // --- Back to latest -------------------------------------------------------
   await page.getByRole('button', { name: 'Back to latest' }).click();
   await expect(page.getByText('Viewing an earlier report')).toHaveCount(0);
-  expect(await imagesTotal(page)).toBe(newestTotal);
+  await expect.poll(() => imagesTotal(page), { message: 'Images table should switch back to the newest report' }).toBe(newestTotal);
 });

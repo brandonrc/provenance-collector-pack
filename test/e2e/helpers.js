@@ -23,12 +23,21 @@ async function mockMe(page, payload) {
   );
 }
 
-// imagesTotal reads the Images table's pager ("1–5 of 5") on the current page;
-// 0 when the table shows its empty state.
-async function imagesTotal(page) {
+// imagesSettled waits until the Images table shows data for its current query:
+// not loading, and not showing the previous query's rows while the new one
+// fetches (the page keeps previous data and shows "Updating…" meanwhile, e.g.
+// right after a filter change or a report switch).
+async function imagesSettled(page) {
   const table = page.getByRole('table', { name: 'Images' });
   await expect(table).toBeVisible();
   await expect(table).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByText('Updating…', { exact: true })).toHaveCount(0);
+}
+
+// imagesTotal reads the Images table's pager ("1–5 of 5") on the current page;
+// 0 when the table shows its empty state.
+async function imagesTotal(page) {
+  await imagesSettled(page);
   const pager = page.getByText(/^\d+–\d+ of [\d,]+$/);
   const empty = page.getByText(/^No images (match these filters|yet)$/);
   await expect(pager.or(empty)).toBeVisible();
@@ -45,4 +54,4 @@ async function gotoSection(page, name) {
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(name);
 }
 
-module.exports = { BASE, shellReady, mockMe, imagesTotal, gotoSection };
+module.exports = { BASE, shellReady, mockMe, imagesSettled, imagesTotal, gotoSection };
