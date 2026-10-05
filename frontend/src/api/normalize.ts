@@ -99,6 +99,7 @@ function stigRollup(raw: unknown): StigRollup {
     noContent: optNum(r.noContent),
     errors: optNum(r.errors),
     pending: optNum(r.pending),
+    stale: optNum(r.stale),
     images: optNum(r.images),
     score: typeof r.score === 'number' && Number.isFinite(r.score) ? r.score : null,
   };
@@ -157,7 +158,7 @@ export function vulnDetail(raw: unknown): VulnDetail {
 
 export function checkDetail(raw: unknown): CheckDetail {
   const r = obj(raw);
-  return { ...(r as unknown as CheckDetail), results: arr(r.results), controls: arr(r.controls), passed: num(r.passed), failed: num(r.failed) };
+  return { ...(r as unknown as CheckDetail), results: arr(r.results), controls: arr(r.controls), passed: num(r.passed), failed: num(r.failed), acceptedRisk: num(r.acceptedRisk) };
 }
 
 export function supplyChain(raw: unknown): SupplyChainSummary {

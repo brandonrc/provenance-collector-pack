@@ -283,7 +283,8 @@ export interface ScannerRun {
   error?: string | null;
 }
 
-export type CheckResultStatus = 'pass' | 'fail';
+/** `accepted-risk`: failing, covered by an approved risk acceptance (controlsEngine.exceptions); no score penalty. */
+export type CheckResultStatus = 'pass' | 'fail' | 'accepted-risk';
 
 export interface CheckResult {
   namespace: string;
@@ -454,6 +455,8 @@ export interface Check {
   remediation: string;
   passed: number;
   failed: number;
+  /** results covered by a risk acceptance (controlsEngine.exceptions); not counted in `failed`. */
+  acceptedRisk?: number;
   controls?: string[];
   stig?: StigRef | null;
 }
@@ -484,6 +487,13 @@ export interface Scan {
   score: number | null;
   grade: Grade | null;
   requestedBy: string | null;
+  /** §14: null (SCAP off) | queued | running | done | skipped | failed */
+  scapStatus?: string | null;
+  scapImages?: number | null;
+  /** images of the scan's SCAP stage evaluated so far */
+  scapProgress?: { done: number; total: number } | null;
+  /** finalized before its SCAP stage completed: scores without the new STIG results, auto-reports / controls deferred */
+  scapPending?: boolean;
 }
 
 export interface ScanDetail extends Scan {
@@ -635,7 +645,7 @@ export type ControlStatus =
   | 'org-provided-unverified'
   | 'not-applicable'
   | 'not-assessed';
-export type AssertionStatus = 'pass' | 'fail' | 'unknown' | 'not-applicable';
+export type AssertionStatus = 'pass' | 'fail' | 'unknown' | 'not-applicable' | 'accepted-risk';
 
 export interface ControlAssertion {
   id: string;
@@ -765,6 +775,8 @@ export interface StigRollup {
   noContent?: number;
   errors?: number;
   pending?: number;
+  /** kept results whose last re-evaluation failed transiently (counted under their status too) */
+  stale?: number;
   images?: number;
   score?: number | null;
 }
@@ -782,6 +794,10 @@ export interface ImageStigBrief {
   cat1Open?: number;
   cat2Open?: number;
   cat3Open?: number;
+  /** the last re-evaluation failed transiently (registry 429, timeout): this is the previous result */
+  stale?: boolean;
+  staleError?: string | null;
+  staleSince?: string | null;
 }
 
 /** Per-(image, benchmark) summary. */
@@ -844,6 +860,8 @@ export interface ImageStig {
   /** from `rootfs.notes` / `droppedXattrs` */
   rootfsWarnings?: string[];
   reason?: string | null;
+  /** `images.stig` brief (stale flag, error) */
+  stig?: ImageStigBrief | null;
 }
 
 export interface ImageStigQuery {
