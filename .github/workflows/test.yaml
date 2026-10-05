@@ -12,9 +12,10 @@ permissions:
   contents: read
 
 env:
-  # Use exactly the toolchain setup-go installs from go.mod's `toolchain`
-  # directive; never auto-download a different one.
-  GOTOOLCHAIN: local
+  # go.mod pins `toolchain go1.26.8`; GOTOOLCHAIN=auto (the default) makes the
+  # installed go download and use exactly that version, so every job runs the
+  # same toolchain the Dockerfile uses.
+  GOTOOLCHAIN: auto
 
 jobs:
   unit-test:
