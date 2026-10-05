@@ -1,9 +1,8 @@
-// biome-ignore-all lint/a11y/noNoninteractiveTabindex: table scroll containers need keyboard access when content overflows.
-import type * as React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { cn } from "@/lib/utils";
+import type * as React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
 
-type TableProps = React.ComponentProps<"table"> & {
+type TableProps = React.ComponentProps<'table'> & {
   /** Accessible name for the horizontal scroll container. */
   scrollContainerLabel?: string;
   /** Additional classes for the horizontal scroll container. */
@@ -12,10 +11,13 @@ type TableProps = React.ComponentProps<"table"> & {
    * Props forwarded to the horizontal scroll container. Its `tabIndex`
    * overrides the automatic focusability applied when the table overflows.
    */
-  scrollContainerProps?: Omit<React.ComponentProps<"section">, "children">;
+  scrollContainerProps?: Omit<React.ComponentProps<'section'>, 'children'>;
 };
 
-type TableHeadProps = Omit<React.ComponentProps<"th">, "onClick" | "onKeyDown"> & {
+type TableHeadProps = Omit<
+  React.ComponentProps<'th'>,
+  'onClick' | 'onKeyDown'
+> & {
   /** Makes the header sortable by rendering its contents in a real button. */
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
   onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
@@ -27,25 +29,26 @@ function Table({
   scrollContainerClassName,
   scrollContainerLabel,
   scrollContainerProps,
-  "aria-label": ariaLabel,
-  "aria-labelledby": ariaLabelledBy,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
   ...props
 }: TableProps) {
   const {
     className: scrollContainerPropsClassName,
-    "aria-label": scrollContainerAriaLabel,
-    "aria-labelledby": scrollContainerAriaLabelledBy,
+    'aria-label': scrollContainerAriaLabel,
+    'aria-labelledby': scrollContainerAriaLabelledBy,
     ref: scrollContainerRef,
     tabIndex: scrollContainerTabIndex,
     ...resolvedScrollContainerProps
   } = scrollContainerProps ?? {};
   const internalScrollContainerRef = useRef<HTMLElement>(null);
-  const [isHorizontallyScrollable, setIsHorizontallyScrollable] = useState(false);
+  const [isHorizontallyScrollable, setIsHorizontallyScrollable] =
+    useState(false);
   const setScrollContainerRef = useCallback(
     (element: HTMLElement | null) => {
       internalScrollContainerRef.current = element;
 
-      if (typeof scrollContainerRef === "function") {
+      if (typeof scrollContainerRef === 'function') {
         return scrollContainerRef(element);
       }
 
@@ -58,7 +61,9 @@ function Table({
   const resolvedScrollContainerLabel =
     scrollContainerAriaLabel ??
     scrollContainerLabel ??
-    (ariaLabel === undefined ? "Table scroll area" : `${ariaLabel} scroll area`);
+    (ariaLabel === undefined
+      ? 'Table scroll area'
+      : `${ariaLabel} scroll area`);
 
   useEffect(() => {
     const scrollContainer = internalScrollContainerRef.current;
@@ -67,23 +72,27 @@ function Table({
     }
 
     const updateScrollability = () => {
-      setIsHorizontallyScrollable(scrollContainer.scrollWidth > scrollContainer.clientWidth);
+      setIsHorizontallyScrollable(
+        scrollContainer.scrollWidth > scrollContainer.clientWidth,
+      );
     };
 
     updateScrollability();
-    window.addEventListener("resize", updateScrollability);
+    window.addEventListener('resize', updateScrollability);
 
     const resizeObserver =
-      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateScrollability);
+      typeof ResizeObserver === 'undefined'
+        ? undefined
+        : new ResizeObserver(updateScrollability);
     resizeObserver?.observe(scrollContainer);
 
-    const table = scrollContainer.querySelector("table");
+    const table = scrollContainer.querySelector('table');
     if (table) {
       resizeObserver?.observe(table);
     }
 
     return () => {
-      window.removeEventListener("resize", updateScrollability);
+      window.removeEventListener('resize', updateScrollability);
       resizeObserver?.disconnect();
     };
   }, []);
@@ -92,14 +101,18 @@ function Table({
     <section
       {...resolvedScrollContainerProps}
       aria-label={
-        scrollContainerAriaLabelledBy === undefined ? resolvedScrollContainerLabel : undefined
+        scrollContainerAriaLabelledBy === undefined
+          ? resolvedScrollContainerLabel
+          : undefined
       }
       aria-labelledby={scrollContainerAriaLabelledBy}
       data-slot="table-container"
       ref={setScrollContainerRef}
-      tabIndex={scrollContainerTabIndex ?? (isHorizontallyScrollable ? 0 : undefined)}
+      tabIndex={
+        scrollContainerTabIndex ?? (isHorizontallyScrollable ? 0 : undefined)
+      }
       className={cn(
-        "relative w-full overflow-x-auto rounded-md border border-border bg-card outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        'relative w-full overflow-x-auto rounded-md border border-border bg-card outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         scrollContainerClassName,
         scrollContainerPropsClassName,
       )}
@@ -108,43 +121,55 @@ function Table({
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
         data-slot="table"
-        className={cn("w-full border-collapse bg-card caption-bottom text-left text-sm", className)}
+        className={cn(
+          'w-full border-collapse bg-card caption-bottom text-left text-sm',
+          className,
+        )}
         {...props}
       />
     </section>
   );
 }
 
-function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
-  return <thead data-slot="table-header" className={cn("bg-background", className)} {...props} />;
+function TableHeader({ className, ...props }: React.ComponentProps<'thead'>) {
+  return (
+    <thead
+      data-slot="table-header"
+      className={cn('bg-background', className)}
+      {...props}
+    />
+  );
 }
 
-function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
+function TableBody({ className, ...props }: React.ComponentProps<'tbody'>) {
   return (
     <tbody
       data-slot="table-body"
-      className={cn("[&_tr:last-child]:border-0", className)}
+      className={cn('[&_tr:last-child]:border-0', className)}
       {...props}
     />
   );
 }
 
-function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
+function TableFooter({ className, ...props }: React.ComponentProps<'tfoot'>) {
   return (
     <tfoot
       data-slot="table-footer"
-      className={cn("border-t border-border bg-card font-medium [&>tr]:last:border-b-0", className)}
+      className={cn(
+        'border-t border-border bg-card font-medium [&>tr]:last:border-b-0',
+        className,
+      )}
       {...props}
     />
   );
 }
 
-function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
+function TableRow({ className, ...props }: React.ComponentProps<'tr'>) {
   return (
     <tr
       data-slot="table-row"
       className={cn(
-        "border-b border-border hover:bg-muted/50 data-[state=selected]:bg-muted data-[state=selected]:hover:bg-muted motion-safe:transition-[color,background-color] motion-safe:duration-(--duration-fast) motion-safe:ease-(--ease-standard)",
+        'border-b border-border hover:bg-muted/50 data-[state=selected]:bg-muted data-[state=selected]:hover:bg-muted motion-safe:transition-[color,background-color] motion-safe:duration-(--duration-fast) motion-safe:ease-(--ease-standard)',
         className,
       )}
       {...props}
@@ -161,7 +186,7 @@ function TableHead({
   ...props
 }: TableHeadProps) {
   const isInteractive = onClick != null;
-  const ariaSort = props["aria-sort"] ?? (isInteractive ? "none" : undefined);
+  const ariaSort = props['aria-sort'] ?? (isInteractive ? 'none' : undefined);
 
   return (
     <th
@@ -170,8 +195,8 @@ function TableHead({
       data-slot="table-head"
       tabIndex={isInteractive ? undefined : tabIndex}
       className={cn(
-        "relative h-10 bg-background text-left align-middle font-medium text-foreground text-sm leading-5 tracking-normal whitespace-nowrap [&:has([role=checkbox])]:pr-0",
-        isInteractive ? "p-0" : "px-4",
+        'relative h-10 bg-background text-left align-middle font-medium text-foreground text-sm leading-5 tracking-normal whitespace-nowrap [&:has([role=checkbox])]:pr-0',
+        isInteractive ? 'p-0' : 'px-4',
         className,
       )}
     >
@@ -193,12 +218,12 @@ function TableHead({
   );
 }
 
-function TableCell({ className, ...props }: React.ComponentProps<"td">) {
+function TableCell({ className, ...props }: React.ComponentProps<'td'>) {
   return (
     <td
       data-slot="table-cell"
       className={cn(
-        "h-12 px-4 py-3 align-middle text-foreground text-sm leading-5 [&:has([role=checkbox])]:pr-0",
+        'h-12 px-4 py-3 align-middle text-foreground text-sm leading-5 [&:has([role=checkbox])]:pr-0',
         className,
       )}
       {...props}
@@ -206,15 +231,27 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   );
 }
 
-function TableCaption({ className, ...props }: React.ComponentProps<"caption">) {
+function TableCaption({
+  className,
+  ...props
+}: React.ComponentProps<'caption'>) {
   return (
     <caption
       data-slot="table-caption"
-      className={cn("px-4 py-3 text-muted-foreground text-xs", className)}
+      className={cn('px-4 py-3 text-muted-foreground text-xs', className)}
       {...props}
     />
   );
 }
 
 export type { TableHeadProps, TableProps };
-export { Table, TableBody, TableCaption, TableCell, TableFooter, TableHead, TableHeader, TableRow };
+export {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+};

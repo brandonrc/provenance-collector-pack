@@ -82,5 +82,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Biome check
-        run: npm run check
+      - name: ESLint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck

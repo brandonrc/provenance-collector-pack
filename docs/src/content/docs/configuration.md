@@ -63,7 +63,7 @@ Read by `cmd/dashboard` (the web UI pod).
 | `PROVENANCE_MANUAL_JOB_TTL` | duration | `1h` | TTL after which dashboard-triggered Jobs are auto-cleaned. `0` (or any zero-duration string) keeps Jobs forever. |
 | `PROVENANCE_NAMESPACE` | string | *(set by chart)* | Namespace the dashboard runs in. Used to address the CronJob from `/api/scan`. The chart populates this via the downward API. |
 | `PROVENANCE_CRONJOB_NAME` | string | *(set by chart)* | Name of the CronJob the dashboard creates manual Jobs from. The chart sets this to the release's full name. |
-| `PROVENANCE_FEATURE_TIMELINE_DELTAS` | bool | `false` | Opt-in: render a `+N / -N` unique-image delta badge on each timeline card vs the previous scan. Exposed in the chart as `webUI.features.timelineDeltas`. |
+| `PROVENANCE_FEATURE_TIMELINE_DELTAS` | bool | `false` | Opt-in: show a `+N / -N` unique-image delta per report on the Reports page vs the previous scan. Exposed in the chart as `webUI.features.timelineDeltas`. |
 
 ## Value formats
 

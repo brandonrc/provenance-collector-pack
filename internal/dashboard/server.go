@@ -17,7 +17,7 @@ import (
 // upgrading from a release without the feature flags will get.
 type Features struct {
 	// TimelineDeltas controls whether the dashboard renders the +N/-N
-	// unique-image delta badge on each timeline card. Off by default to
+	// unique-image delta column on the Reports page. Off by default to
 	// match the chart default; enable via webUI.features.timelineDeltas.
 	TimelineDeltas bool `json:"timelineDeltas"`
 }

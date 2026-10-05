@@ -1,126 +1,108 @@
-import Keycloak from "keycloak-js";
+import Keycloak, { type KeycloakConfig as KcConfig, type KeycloakInitOptions } from 'keycloak-js';
+import type { KeycloakConfig } from '@/config';
+import type { AuthStrategy, AuthUser } from './strategy';
 
-import { loadAppConfig } from "@/app/config";
+/**
+ * keycloak-js PKCE login for provenance mode, matching provenance-collector-pack's old
+ * `frontend/src/auth/keycloak.ts`: `login-required` + `S256`, no session iframe; the access token
+ * is sent as a bearer on every API call and refreshed when it has < 30 s left. The dashboard
+ * validates it against Keycloak's userinfo endpoint.
+ */
 
-declare global {
-  interface Window {
-    // Lets non-production runs (tests, Playwright) inject a fake authenticated
-    // session instead of redirecting to Keycloak. Never honored in production.
-    __PW_E2E_AUTH__?: {
-      authenticated: boolean;
-      token?: string;
-      idTokenParsed?: Record<string, string>;
-    };
+/** The subset of a keycloak-js instance this module uses (tests pass a fake). */
+export interface KeycloakLike {
+  authenticated?: boolean;
+  token?: string;
+  idTokenParsed?: Record<string, unknown>;
+  init(options: KeycloakInitOptions): Promise<boolean>;
+  updateToken(minValidity: number): Promise<boolean>;
+  login(options?: { redirectUri?: string }): Promise<void>;
+  logout(options?: { redirectUri?: string }): Promise<void>;
+}
+
+export type KeycloakFactory = (config: KcConfig) => KeycloakLike;
+
+/** Thrown when the session can't be refreshed; a redirect to Keycloak is already in flight. */
+export class SessionExpiredError extends Error {
+  constructor() {
+    super('Session expired — redirecting to login');
+    this.name = 'SessionExpiredError';
   }
 }
 
-let _keycloak: Keycloak | null = null;
+export const KEYCLOAK_INIT_OPTIONS: KeycloakInitOptions = {
+  onLoad: 'login-required',
+  pkceMethod: 'S256',
+  checkLoginIframe: false,
+};
 
-// A stand-in Keycloak that reports an authenticated session without contacting
-// a server — used by the test/E2E shim and the local-dev bypass below.
-function fakeSession(token?: string, idTokenParsed?: Record<string, string>): Keycloak {
+export interface KeycloakStrategy extends AuthStrategy {
+  readonly keycloak: KeycloakLike;
+  /** false → keycloak-js is redirecting the browser to the login page; don't render. */
+  readonly authenticated: boolean;
+}
+
+function userFrom(kc: KeycloakLike): AuthUser | null {
+  const claims = kc.idTokenParsed;
+  if (!kc.authenticated || !claims) return null;
+  const s = (k: string) => (typeof claims[k] === 'string' ? (claims[k] as string) : '');
+  return { name: s('name') || s('preferred_username') || s('email') || s('sub') || 'User', email: s('email') };
+}
+
+/** Wraps an initialised keycloak-js instance as the client's bearer strategy. */
+export function bearerStrategy(kc: KeycloakLike, authenticated = Boolean(kc.authenticated)): KeycloakStrategy {
+  const relogin = () => {
+    void kc.login();
+    return new SessionExpiredError();
+  };
+  return {
+    kind: 'bearer',
+    keycloak: kc,
+    authenticated,
+    retryOn401: true,
+    async headers(forceRefresh = false) {
+      if (!kc.authenticated) throw relogin();
+      try {
+        // -1 forces a refresh (the token was just rejected); 30 is a no-op unless < 30 s remain
+        await kc.updateToken(forceRefresh ? -1 : 30);
+      } catch {
+        throw relogin();
+      }
+      if (!kc.token) throw relogin();
+      return { Authorization: `Bearer ${kc.token}` };
+    },
+    signOut() {
+      void kc.logout({ redirectUri: `${window.location.origin}/` });
+    },
+    user: () => userFrom(kc),
+  };
+}
+
+/** Initialise keycloak-js from `/config.json`'s `keycloak` block. */
+export async function createKeycloakStrategy(
+  config: KeycloakConfig,
+  options: { factory?: KeycloakFactory; initOptions?: Partial<KeycloakInitOptions> } = {},
+): Promise<KeycloakStrategy> {
+  const factory: KeycloakFactory = options.factory ?? ((c) => new Keycloak(c) as unknown as KeycloakLike);
+  const kc = factory({ url: config.url, realm: config.realm, clientId: config.clientId });
+  const authenticated = await kc.init({ ...KEYCLOAK_INIT_OPTIONS, ...options.initOptions });
+  return bearerStrategy(kc, authenticated);
+}
+
+/**
+ * A stand-in authenticated session (no Keycloak server): used by `VITE_API_MOCK=provenance`
+ * and tests. Never wired into a production build.
+ */
+export function fakeKeycloak(token: string, claims: Record<string, unknown>): KeycloakLike {
   return {
     authenticated: true,
     token,
-    idTokenParsed,
-    updateToken: async () => true,
+    idTokenParsed: claims,
+    init: async () => true,
+    updateToken: async () => false,
     login: async () => {},
-    logout: async () => {},
-  } as unknown as Keycloak;
-}
-
-/**
- * Initialize Keycloak with login-required + PKCE. Resolves once the user is
- * authenticated (keycloak-js redirects to the login page if they are not).
- * Must be awaited before the app renders.
- */
-export async function initKeycloak(): Promise<Keycloak> {
-  if (_keycloak) {
-    return _keycloak;
-  }
-
-  const injected = window.__PW_E2E_AUTH__;
-  if (import.meta.env.MODE !== "production" && injected?.authenticated) {
-    _keycloak = fakeSession(injected.token, injected.idTokenParsed);
-    return _keycloak;
-  }
-
-  // Local-dev bypass mirroring the dashboard's dev mode: skip Keycloak
-  // entirely and run as a fixed "dev" identity (the same one the backend
-  // injects). Enabled with VITE_DEV_NO_AUTH=true, which `make run-dev` sets so
-  // the UI runs against a Keycloak-free local cluster. Never honored in a
-  // production build.
-  if (import.meta.env.MODE !== "production" && import.meta.env.VITE_DEV_NO_AUTH === "true") {
-    _keycloak = fakeSession("dev", {
-      name: "dev",
-      preferred_username: "dev",
-      email: "dev@local",
-      sub: "dev",
-    });
-    return _keycloak;
-  }
-
-  const { keycloak: cfg } = await loadAppConfig();
-  const kc = new Keycloak({ url: cfg.url, realm: cfg.realm, clientId: cfg.clientId });
-
-  await kc.init({
-    onLoad: "login-required",
-    pkceMethod: "S256",
-    checkLoginIframe: false,
-  });
-
-  _keycloak = kc;
-  return kc;
-}
-
-export function getKeycloakInstance(): Keycloak | null {
-  return _keycloak;
-}
-
-/**
- * Thrown when the refresh token has expired and a full re-authentication is
- * required. Callers should stop making API calls — a redirect to Keycloak is
- * already in flight.
- */
-export class SessionExpiredError extends Error {
-  constructor() {
-    super("Session expired — redirecting to login");
-    this.name = "SessionExpiredError";
-  }
-}
-
-/**
- * Returns a valid access token, refreshing it first if it is close to expiry.
- * Pass `forceRefresh` to refresh unconditionally (used by the 401 retry, where
- * the current token was just rejected and re-sending it would only 401 again).
- */
-export async function getToken(forceRefresh = false): Promise<string> {
-  if (!_keycloak?.authenticated) {
-    throw new SessionExpiredError();
-  }
-
-  try {
-    // updateToken(-1) forces a refresh; updateToken(30) is a no-op unless the
-    // token has under 30s of validity left.
-    await _keycloak.updateToken(forceRefresh ? -1 : 30);
-  } catch {
-    _keycloak.login();
-    throw new SessionExpiredError();
-  }
-
-  const token = _keycloak.token;
-  if (!token) {
-    _keycloak.login();
-    throw new SessionExpiredError();
-  }
-
-  return token;
-}
-
-export function signOut() {
-  if (_keycloak) {
-    _keycloak.logout({ redirectUri: `${window.location.origin}/` });
-  } else {
-    window.location.href = "/";
-  }
+    logout: async () => {
+      window.location.assign('/');
+    },
+  };
 }

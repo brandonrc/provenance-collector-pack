@@ -142,9 +142,9 @@ jobs:
           echo ""
           echo "Integration test passed!"
 
-      # Timeline scan-switch coverage (#19): deploy a second workload, trigger
-      # another scan, and verify via the dashboard UI that picking each
-      # timeline entry actually swaps the images table — not just the stat cards.
+      # Report-switch coverage (#19): deploy a second workload, trigger another
+      # scan, and verify via the dashboard UI that viewing the older report on
+      # the Reports page swaps the Images table, not just the Overview tiles.
       #
       # We can't use `busybox` as the sentinel — the sandbox's platform stack
       # ships `nebari-landing-webapi`, which uses `busybox:1.36` as a sidecar.
@@ -200,10 +200,12 @@ jobs:
             exit 1
           fi
 
-      # The dashboard is API-only now; the UI is the standalone React SPA. Serve
-      # it with Vite (dev mode) proxying /api to the port-forwarded dashboard,
-      # and point the browser tests at Vite. VITE_DEV_NO_AUTH bypasses the
-      # browser Keycloak login for CI (the sandbox chart installs with auth off).
+      # The dashboard is API-only; the UI is the standalone React SPA in
+      # frontend/. Serve it with Vite (dev mode) proxying /api to the
+      # port-forwarded dashboard, and point the browser tests at Vite. The dev
+      # server's config.json has no keycloak block, so the SPA sends no bearer
+      # (the sandbox chart installs with auth off), and the SPA detects
+      # provenance-only mode from the dashboard's 404 on /api/v1/summary.
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
         with:
@@ -215,8 +217,8 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          VITE_DEV_NO_AUTH=true WEBAPI_URL=http://localhost:8080 \
-            nohup npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/vite.log 2>&1 &
+          API_PROXY=http://localhost:8080 \
+            nohup npx vite --host 127.0.0.1 --port 5173 --strictPort > /tmp/vite.log 2>&1 &
           for i in $(seq 1 30); do
             curl -sf http://localhost:5173/ >/dev/null 2>&1 && { echo "Vite up (attempt $i)"; break; }
             sleep 1
@@ -259,40 +261,14 @@ jobs:
       - name: Capture dashboard screenshots
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          # Install locally rather than globally so the inline node script
-          # below can require('puppeteer') without NODE_PATH gymnastics.
-          npm install puppeteer
+          # Same script as frontend/screenshots/run.sh (mock data), here against
+          # the sandbox's real reports. Copied next to test/e2e's node_modules so
+          # it uses the Playwright + Chromium installed above.
+          cp frontend/screenshots/shoot.mjs test/e2e/shoot.mjs
           mkdir -p docs/screenshots
-
-          node << 'JSEOF'
-          const puppeteer = require('puppeteer');
-
-          (async () => {
-            const browser = await puppeteer.launch({
-              headless: 'new',
-              args: ['--no-sandbox', '--disable-setuid-sandbox'],
-            });
-
-            const page = await browser.newPage();
-            await page.setViewport({ width: 1440, height: 900 });
-
-            // Vite (dev, VITE_DEV_NO_AUTH) serves the SPA at :5173 and proxies
-            // /api to the dashboard; no browser login needed for the screenshot.
-            await page.goto('http://localhost:5173', { waitUntil: 'networkidle0', timeout: 30000 });
-            await new Promise(r => setTimeout(r, 2000));
-            await page.screenshot({ path: 'docs/screenshots/dashboard-overview.png', fullPage: false });
-
-            const row = await page.$('tr.cursor-pointer');
-            if (row) {
-              await row.click();
-              await new Promise(r => setTimeout(r, 500));
-              await page.screenshot({ path: 'docs/screenshots/dashboard-detail.png', fullPage: false });
-            }
-
-            await browser.close();
-            console.log('Screenshots captured successfully');
-          })();
-          JSEOF
+          cd test/e2e
+          BASE_URL=http://127.0.0.1:5173 OUT_DIR="$GITHUB_WORKSPACE/docs/screenshots" node shoot.mjs
+          rm shoot.mjs
 
       - name: Commit screenshots
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

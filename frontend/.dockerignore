@@ -1,5 +1,10 @@
 node_modules
 dist
-.git
-*.log
-.DS_Store
+screenshots
+*.tsbuildinfo
+dist-mock
+dist-mock-provenance
+coverage
+playwright-report
+test-results
+.node-version

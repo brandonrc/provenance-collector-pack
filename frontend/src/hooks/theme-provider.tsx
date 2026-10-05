@@ -1,9 +1,9 @@
-import { createContext, type ReactNode, useContext } from "react";
+import { createContext, type ReactNode, useContext } from 'react';
 import {
   type UseThemePreferenceOptions,
   type UseThemePreferenceResult,
   useThemePreference,
-} from "@/hooks/use-theme-preference";
+} from '@/hooks/use-theme-preference';
 
 const ThemeContext = createContext<UseThemePreferenceResult | null>(null);
 
@@ -18,13 +18,15 @@ interface ThemeProviderProps extends UseThemePreferenceOptions {
  */
 function ThemeProvider({ children, ...options }: ThemeProviderProps) {
   const theme = useThemePreference(options);
-  return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+  );
 }
 
 function useTheme(): UseThemePreferenceResult {
   const context = useContext(ThemeContext);
   if (!context) {
-    throw new Error("useTheme must be used within a <ThemeProvider>.");
+    throw new Error('useTheme must be used within a <ThemeProvider>.');
   }
   return context;
 }

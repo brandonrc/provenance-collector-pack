@@ -1,6 +1,6 @@
-import { cva, type VariantProps } from "class-variance-authority";
-import type * as React from "react";
-import { cn } from "@/lib/utils";
+import { cva, type VariantProps } from 'class-variance-authority';
+import type * as React from 'react';
+import { cn } from '@/lib/utils';
 
 const alertVariants = cva(
   // CSS-grid layout from the Figma frame: an optional 16px icon column and a
@@ -9,7 +9,7 @@ const alertVariants = cva(
   // nudged down half a line to align with the title's cap height. An
   // `AlertAction` floats in the top-right corner, so reserve trailing space for
   // it whenever one is present.
-  "relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-md border p-2 text-sm has-[>svg]:grid-cols-[1rem_1fr] has-[>svg]:gap-x-2 has-data-[slot=alert-action]:pr-18 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
+  'relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-md border p-2 text-sm has-[>svg]:grid-cols-[1rem_1fr] has-[>svg]:gap-x-2 has-data-[slot=alert-action]:pr-18 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current',
   {
     variants: {
       // Maps onto the Figma `Alert` variant set. `default` is the neutral card
@@ -19,30 +19,35 @@ const alertVariants = cva(
       // token; only `default` mutes its description.
       variant: {
         default:
-          "border-border bg-card text-foreground *:data-[slot=alert-description]:text-muted-foreground",
-        success: "border-success-foreground bg-success text-success-foreground",
-        warning: "border-warning-foreground bg-warning text-warning-foreground",
-        destructive: "border-destructive-foreground bg-destructive text-destructive-foreground",
+          'border-border bg-card text-foreground *:data-[slot=alert-description]:text-muted-foreground',
+        success: 'border-success-foreground bg-success text-success-foreground',
+        warning: 'border-warning-foreground bg-warning text-warning-foreground',
+        destructive:
+          'border-destructive-foreground bg-destructive text-destructive-foreground',
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: 'default',
     },
   },
 );
 
-type AlertProps = React.ComponentProps<"div"> & VariantProps<typeof alertVariants>;
+type AlertProps = React.ComponentProps<'div'> &
+  VariantProps<typeof alertVariants>;
 
 // Map severity onto the ARIA live-region role. `alert` (assertive) interrupts
 // the screen reader immediately and is reserved for variants that demand
 // attention — `warning`/`destructive`. The calmer `success`/`default`
 // variants use `status` (polite) so they're announced without cutting off
 // whatever the user is doing. Callers can override with an explicit `role`.
-const alertRoleForVariant: Record<NonNullable<AlertProps["variant"]>, "alert" | "status"> = {
-  default: "status",
-  success: "status",
-  warning: "alert",
-  destructive: "alert",
+const alertRoleForVariant: Record<
+  NonNullable<AlertProps['variant']>,
+  'alert' | 'status'
+> = {
+  default: 'status',
+  success: 'status',
+  warning: 'alert',
+  destructive: 'alert',
 };
 
 /**
@@ -56,27 +61,34 @@ const alertRoleForVariant: Record<NonNullable<AlertProps["variant"]>, "alert" | 
 function Alert({ className, variant, role, ...props }: AlertProps) {
   return (
     <div
-      role={role ?? alertRoleForVariant[variant ?? "default"]}
+      role={role ?? alertRoleForVariant[variant ?? 'default']}
       data-slot="alert"
-      data-variant={variant ?? "default"}
+      data-variant={variant ?? 'default'}
       className={cn(alertVariants({ variant }), className)}
       {...props}
     />
   );
 }
 
-function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
+function AlertTitle({ className, ...props }: React.ComponentProps<'div'>) {
   return (
-    <div data-slot="alert-title" className={cn("col-start-2 font-medium", className)} {...props} />
+    <div
+      data-slot="alert-title"
+      className={cn('col-start-2 font-medium', className)}
+      {...props}
+    />
   );
 }
 
-function AlertDescription({ className, ...props }: React.ComponentProps<"div">) {
+function AlertDescription({
+  className,
+  ...props
+}: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="alert-description"
       className={cn(
-        "col-start-2 grid justify-items-start gap-1 text-sm [&_p]:leading-relaxed",
+        'col-start-2 grid justify-items-start gap-1 text-sm [&_p]:leading-relaxed',
         className,
       )}
       {...props}
@@ -89,9 +101,13 @@ function AlertDescription({ className, ...props }: React.ComponentProps<"div">) 
  * dismiss icon button or a short action button. The root reserves trailing
  * padding whenever an `AlertAction` is present so it never overlaps the content.
  */
-function AlertAction({ className, ...props }: React.ComponentProps<"div">) {
+function AlertAction({ className, ...props }: React.ComponentProps<'div'>) {
   return (
-    <div data-slot="alert-action" className={cn("absolute top-2 right-2", className)} {...props} />
+    <div
+      data-slot="alert-action"
+      className={cn('absolute top-2 right-2', className)}
+      {...props}
+    />
   );
 }
 

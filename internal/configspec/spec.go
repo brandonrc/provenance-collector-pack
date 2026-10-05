@@ -294,7 +294,7 @@ var Vars = []Var{
 		Scope:       ScopeDashboard,
 		Kind:        KindBool,
 		Default:     "false",
-		Description: "Opt-in: render a `+N / -N` unique-image delta badge on each timeline card vs the previous scan. Exposed in the chart as `webUI.features.timelineDeltas`.",
+		Description: "Opt-in: show a `+N / -N` unique-image delta per report on the Reports page vs the previous scan. Exposed in the chart as `webUI.features.timelineDeltas`.",
 	},
 }
 

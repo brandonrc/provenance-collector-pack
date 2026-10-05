@@ -15,7 +15,7 @@ spec:
   template:
     metadata:
       annotations:
-        # Roll the pod when the rendered nginx.conf / config.json changes: a
+        # Roll the pod when the rendered config.json changes: a
         # ConfigMap update alone does not restart its consumers, so without this a
         # config-only `helm upgrade` would leave the old config live in the pod.
         checksum/config: {{ include (print $.Template.BasePath "/frontend-configmap.yaml") . | sha256sum }}
@@ -37,9 +37,20 @@ spec:
         # nginx serves the React SPA and proxies /api/* to the dashboard
         # ClusterIP. This is the service the NebariApp targets; auth is handled
         # client-side by keycloak-js (PKCE/S256) and validated by the dashboard.
+        #
+        # The image renders its nginx server block at startup from
+        # /etc/nginx/templates/default.conf.template (envsubst into /tmp), so the
+        # chart only sets the listen port and the /api/ upstream. A bare Service
+        # name is qualified with the pod's <ns>.svc.<cluster-domain> search
+        # domain by the image's entrypoint, and nginx re-resolves it every 30s.
         - name: frontend
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: NGINX_PORT
+              value: {{ .Values.frontend.port | quote }}
+            - name: API_UPSTREAM
+              value: "{{ include "provenance-collector.fullname" . }}-web:{{ .Values.webUI.port }}"
           ports:
             - name: http
               containerPort: {{ .Values.frontend.port }}
@@ -68,18 +79,12 @@ spec:
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
           volumeMounts:
-            # nginx needs writable /tmp, /var/cache/nginx, and /var/run.
+            # nginx writes its pid, temp files and the rendered server block
+            # under /tmp, and its cache under /var/cache/nginx.
             - name: nginx-tmp
               mountPath: /tmp
             - name: nginx-cache
               mountPath: /var/cache/nginx
-            - name: nginx-run
-              mountPath: /var/run
-            # Helm-rendered nginx.conf (adds the /api/ proxy to the dashboard).
-            - name: frontend-config
-              mountPath: /etc/nginx/nginx.conf
-              subPath: nginx.conf
-              readOnly: true
             # Helm-rendered config.json, overriding the placeholder baked into
             # the image at build time.
             - name: frontend-config
@@ -90,8 +95,6 @@ spec:
         - name: nginx-tmp
           emptyDir: {}
         - name: nginx-cache
-          emptyDir: {}
-        - name: nginx-run
           emptyDir: {}
         - name: frontend-config
           configMap:

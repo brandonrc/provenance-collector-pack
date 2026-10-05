@@ -71,8 +71,8 @@ webUI:
   uploadMaxBytes: 16777216  # 16 MiB
   # Opt-in dashboard features. All default off; flip individually.
   features:
-    # Renders a +N / -N unique-image delta badge on each timeline card,
-    # showing how the report changed vs the previous (older) scan. Useful
+    # Shows a +N / -N unique-image delta column on the Reports page, i.e.
+    # how each report changed vs the previous (older) scan. Useful
     # once you have enough scan history to notice drift at a glance.
     timelineDeltas: false
   resources:
@@ -111,10 +111,11 @@ webUI:
 # =============================================================================
 # Frontend (React SPA)
 # =============================================================================
-# The dashboard UI is a standalone React app served by its own nginx image and
-# Deployment. nginx serves the SPA and reverse-proxies /api/* to the dashboard
-# (-web) Service over cluster DNS. Requires webUI.enabled=true (the proxy
-# target). The NebariApp routes gateway traffic here, not at the dashboard.
+# The dashboard UI is a standalone React app (built on the Nebari design
+# system) served by its own unprivileged nginx image and Deployment. nginx
+# serves the SPA and reverse-proxies /api/* to the dashboard (-web) Service over
+# cluster DNS. Requires webUI.enabled=true (the proxy target). The NebariApp
+# routes gateway traffic here, not at the dashboard.
 frontend:
   # Set enabled=false to skip the frontend (e.g. an API-only / headless install).
   enabled: true
@@ -125,18 +126,20 @@ frontend:
     # versions move together. Override to pull a specific build.
     tag: ""
     pullPolicy: IfNotPresent
-  # Port nginx listens on. Must be > 1024 - the container runs as non-root
-  # (UID 101) with all capabilities dropped and cannot bind privileged ports.
+  # Port nginx listens on (passed to the image as NGINX_PORT). Must be > 1024 -
+  # the container runs as non-root (UID 101) with all capabilities dropped and
+  # cannot bind privileged ports.
   port: 8080
   service:
     port: 8080
-  # Optional browser-tab title override rendered into config.json.
+  # Optional product title override rendered into config.json, shown in the
+  # header and the browser tab. Empty uses "Supply-chain provenance".
   title: ""
   # Branding settings — rendered into /config.json at deploy time and applied by
   # the SPA before it mounts. Leave everything empty to use the built-in Nebari
-  # defaults (no visual change from an unbranded install). Outside Kubernetes the
-  # same fields resolve from a local config.json or BRANDING_* env vars — see
-  # docs/configuration and frontend/docker-entrypoint.sh.
+  # defaults (no visual change from an unbranded install). Outside Kubernetes,
+  # mount your own config.json over /usr/share/nginx/html/config.json — see
+  # the web dashboard docs.
   branding:
     # URL to a custom logo shown in the header. Leave empty for the built-in
     # Nebari logo. May be an absolute http(s) URL or a root-relative path.

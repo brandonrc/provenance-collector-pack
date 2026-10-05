@@ -1,128 +1,81 @@
-import { useAtom, useSetAtom } from "jotai";
-import { useEffect } from "react";
-import { HelmTable } from "@/components/HelmTable";
-import { ImageDetailDrawer } from "@/components/ImageDetailDrawer";
-import { ImagesTable } from "@/components/ImagesTable";
-import { PageHeader } from "@/components/PageHeader";
-import { StatCards } from "@/components/StatCards";
-import { Timeline } from "@/components/Timeline";
-import { Toasts } from "@/components/Toasts";
-import { Topbar } from "@/components/Topbar";
-import { Spinner } from "@/components/ui/spinner";
-import { useMe } from "@/hooks/useMe";
-import { useReport, useReports } from "@/hooks/useReports";
-import { EMPTY_FILTERS } from "@/lib/images";
-import { cn } from "@/lib/utils";
-import { activeReportFilenameAtom, filtersAtom, pageAtom, statFilterAtom } from "@/store/uiAtoms";
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
+import { type ReactNode, useState } from 'react';
+import { createBrowserRouter, createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
+import { AppLayout } from '@/components/app-layout';
+import { ByMode, Gate } from '@/components/mode-gate';
+import { RootErrorBoundary, RouteErrorBoundary } from '@/components/error-boundary';
+import { Toaster } from '@/components/ui/toast';
+import { ThemeProvider } from '@/hooks/theme-provider';
+import { CheckDetailPage } from '@/pages/check-detail';
+import { ChecksPage } from '@/pages/checks';
+import { CompliancePage } from '@/pages/compliance';
+import { ImageDetailPage } from '@/pages/image-detail';
+import { ImagesPage } from '@/pages/images';
+import { NamespacesPage } from '@/pages/namespaces';
+import { NotFoundPage } from '@/pages/not-found';
+import { OverviewPage } from '@/pages/overview';
+import { ProvenanceOverviewPage } from '@/pages/provenance/overview';
+import { ProvenanceReportsPage } from '@/pages/provenance/reports';
+import { ProvenanceScansPage } from '@/pages/provenance/scans';
+import { ReportsPage } from '@/pages/reports';
+import { ScanDetailPage } from '@/pages/scan-detail';
+import { ScansPage } from '@/pages/scans';
+import { SettingsPage } from '@/pages/settings';
+import { SupplyChainPage } from '@/pages/supply-chain';
+import { VulnerabilitiesPage } from '@/pages/vulnerabilities';
+import { VulnerabilityDetailPage } from '@/pages/vulnerability-detail';
+import { WorkloadsPage } from '@/pages/workloads';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
-function Section({
-  title,
-  count,
-  countTestId,
-  className,
-  children,
-}: {
-  title: string;
-  count?: string;
-  countTestId?: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
+export const routes: RouteObject[] = [
+  {
+    path: '/',
+    element: <AppLayout />,
+    errorElement: <RootErrorBoundary />,
+    children: [
+      {
+        // pathless layout route: a page error renders inside the app shell (sidebar stays usable)
+        errorElement: <RouteErrorBoundary />,
+        children: [
+          { index: true, element: <ByMode posture={<OverviewPage />} provenance={<ProvenanceOverviewPage />} /> },
+          { path: 'images', element: <ImagesPage /> },
+          { path: 'images/:id', element: <ImageDetailPage /> },
+          { path: 'vulnerabilities', element: <Gate feature="vulnerabilities"><VulnerabilitiesPage /></Gate> },
+          { path: 'vulnerabilities/:vulnId', element: <Gate feature="vulnerabilities"><VulnerabilityDetailPage /></Gate> },
+          { path: 'workloads', element: <Gate feature="workloads"><WorkloadsPage /></Gate> },
+          { path: 'namespaces', element: <Gate feature="namespaces"><NamespacesPage /></Gate> },
+          { path: 'checks', element: <Gate feature="checks"><ChecksPage /></Gate> },
+          { path: 'supply-chain', element: <SupplyChainPage /> },
+          { path: 'checks/:id', element: <Gate feature="checks"><CheckDetailPage /></Gate> },
+          { path: 'scans', element: <ByMode posture={<ScansPage />} provenance={<ProvenanceScansPage />} /> },
+          { path: 'scans/:id', element: <Gate feature="scanDetail"><ScanDetailPage /></Gate> },
+          { path: 'reports', element: <ByMode posture={<ReportsPage />} provenance={<ProvenanceReportsPage />} /> },
+          { path: 'compliance', element: <Gate feature="compliance"><CompliancePage /></Gate> },
+          { path: 'settings', element: <Gate feature="settings"><SettingsPage /></Gate> },
+          { path: '*', element: <NotFoundPage /> },
+        ],
+      },
+    ],
+  },
+];
+
+export function Providers({ client, children }: { client: QueryClient; children: ReactNode }) {
   return (
-    <section className={cn("mb-6", className)}>
-      <header className="mb-3 flex items-baseline gap-2">
-        <h2 className="font-semibold text-foreground text-sm tracking-tight">{title}</h2>
-        {count ? (
-          <span data-testid={countTestId} className="text-[13px] text-muted-foreground">
-            ({count})
-          </span>
-        ) : null}
-      </header>
-      {children}
-    </section>
+    <ThemeProvider>
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <Toaster>{children}</Toaster>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 
-function CenteredMessage({ children }: { children: React.ReactNode }) {
-  return <div className="py-16 text-center text-muted-foreground text-sm">{children}</div>;
-}
-
-export default function App() {
-  const me = useMe();
-  const { data, isLoading: reportsLoading, isError } = useReports();
-  const reports = data ?? [];
-
-  const [active] = useAtom(activeReportFilenameAtom);
-  const activeFilename = active ?? reports[0]?.filename ?? null;
-  const { data: report } = useReport(activeFilename);
-
-  // Reset the images-table view whenever the active report changes, mirroring
-  // the old loadReport() which cleared filters/stat/page on every switch.
-  const setFilters = useSetAtom(filtersAtom);
-  const setStatFilter = useSetAtom(statFilterAtom);
-  const setPage = useSetAtom(pageAtom);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: activeFilename is the intended trigger — resetting the view each time the selected report changes.
-  useEffect(() => {
-    setFilters(EMPTY_FILTERS);
-    setStatFilter("");
-    setPage(0);
-  }, [activeFilename, setFilters, setStatFilter, setPage]);
-
+export function App({ client, initialPath }: { client: QueryClient; initialPath?: string }) {
+  const [router] = useState(() => (initialPath ? createMemoryRouter(routes, { initialEntries: [initialPath] }) : createBrowserRouter(routes)));
   return (
-    <div className="min-h-full">
-      <Topbar />
-      <main className="w-full px-10 pt-6 pb-10">
-        <PageHeader
-          clusterName={report?.metadata.clusterName}
-          generatedAt={report?.metadata.generatedAt}
-          activeFilename={activeFilename}
-          canRunScan={me.canRunScan}
-        />
-
-        {reportsLoading ? (
-          <CenteredMessage>
-            <Spinner className="mx-auto" />
-          </CenteredMessage>
-        ) : isError ? (
-          <CenteredMessage>Failed to load reports</CenteredMessage>
-        ) : reports.length === 0 ? (
-          <Section title="Timeline">
-            <Timeline reports={[]} activeFilename={null} />
-          </Section>
-        ) : (
-          <>
-            {report ? <StatCards summary={report.summary} /> : null}
-
-            <Section title="Timeline" className="mt-10">
-              <Timeline reports={reports} activeFilename={activeFilename} />
-            </Section>
-
-            <Section
-              title="Container Images"
-              count={report ? String(report.images.length) : undefined}
-              countTestId="images-total"
-            >
-              {report ? (
-                <ImagesTable images={report.images} />
-              ) : (
-                <CenteredMessage>
-                  <Spinner className="mx-auto" />
-                </CenteredMessage>
-              )}
-            </Section>
-
-            <Section
-              title="Helm Releases"
-              count={report?.helmReleases?.length ? String(report.helmReleases.length) : undefined}
-            >
-              {report ? <HelmTable releases={report.helmReleases ?? []} /> : null}
-            </Section>
-          </>
-        )}
-      </main>
-
-      <ImageDetailDrawer />
-      <Toasts />
-    </div>
+    <Providers client={client}>
+      <RouterProvider router={router} />
+    </Providers>
   );
 }

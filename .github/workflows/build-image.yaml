@@ -9,6 +9,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "Dockerfile"
+      - "frontend/**"
       - ".github/workflows/build-image.yaml"
   pull_request:
     branches: [main]
@@ -134,8 +135,9 @@ jobs:
             cosign sign "${repo}@${DIGEST}"
           done
 
-  # The standalone React UI ships as its own nginx image. It has no third-party
-  # registry mirror (unlike the Go image on Quay), so it publishes to GHCR only.
+  # The standalone React UI (frontend/) ships as its own unprivileged nginx
+  # image (uid 101, port 8080). It has no third-party registry mirror (unlike
+  # the Go image on Quay), so it publishes to GHCR only.
   build-frontend:
     runs-on: ubuntu-latest
     if: >-

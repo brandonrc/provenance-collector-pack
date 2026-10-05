@@ -1,17 +1,8 @@
-# Logs
-*.log
-npm-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-.env
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.sw?
+node_modules/
+dist/
+*.tsbuildinfo
+test-results/
+dist-mock/
+dist-mock-provenance/
+coverage/
+playwright-report/

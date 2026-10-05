@@ -1,41 +1,42 @@
 /// <reference types="vitest/config" />
+import { fileURLToPath, URL } from 'node:url';
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
 
-import path from "node:path";
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv } from "vite";
-
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  // In local dev Vite stands in for the production nginx layer and proxies the
-  // backend routes to the dashboard API. Override with WEBAPI_URL to point at
-  // an in-cluster ClusterIP instead of a locally running dashboard.
-  const apiTarget = env.WEBAPI_URL ?? "http://localhost:8080";
-
-  return {
-    // The Tailwind plugin is required for Tailwind v4 utilities and shadcn
-    // component styles to compile in dev and build.
-    plugins: [react(), tailwindcss()],
-
-    resolve: {
-      alias: {
-        // shadcn emits imports like "@/components" and "@/lib/utils".
-        "@": path.resolve(__dirname, "./src"),
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
+  server: {
+    host: true,
+    port: 5173,
+    proxy: process.env.VITE_API_MOCK
+      ? undefined
+      : { '/api': process.env.API_PROXY ?? 'http://localhost:8000' },
+  },
+  preview: { host: true, port: 4173 },
+  build: {
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (/recharts|d3-|victory-vendor|decimal\.js|es-toolkit|immer|reselect|@reduxjs|redux/.test(id)) return 'charts';
+          if (/@base-ui|@floating-ui/.test(id)) return 'base-ui';
+          if (/@tanstack/.test(id)) return 'tanstack';
+          if (/lucide-react/.test(id)) return 'icons';
+          if (/react-router|react-dom|scheduler|\/react\//.test(id)) return 'react';
+          return 'vendor';
+        },
       },
     },
-
-    server: {
-      proxy: {
-        "/api": { target: apiTarget, changeOrigin: true },
-      },
-    },
-
-    test: {
-      environment: "jsdom",
-      globals: true,
-      setupFiles: "./src/test/setup.ts",
-      css: true,
-      include: ["src/**/*.{test,spec}.{ts,tsx}"],
-    },
-  };
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    css: false,
+  },
 });

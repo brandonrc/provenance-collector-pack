@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 
-const THEME_MODES = ["light", "dark", "system"] as const;
+const THEME_MODES = ['light', 'dark', 'system'] as const;
 
 type ThemeMode = (typeof THEME_MODES)[number];
 
 /** Storage key used when the caller doesn't pass one. */
-const DEFAULT_THEME_STORAGE_KEY = "nebari:themeMode";
+const DEFAULT_THEME_STORAGE_KEY = 'nebari:themeMode';
 
-const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
+const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 
 function isThemeMode(value: unknown): value is ThemeMode {
-  return typeof value === "string" && (THEME_MODES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (THEME_MODES as readonly string[]).includes(value)
+  );
 }
 
 interface UseThemePreferenceOptions {
@@ -55,9 +58,9 @@ function subscribeToThemeMode(onStoreChange: () => void): () => void {
 function readStoredMode(storageKey: string): ThemeMode {
   try {
     const stored = window.localStorage.getItem(storageKey);
-    return isThemeMode(stored) ? stored : "system";
+    return isThemeMode(stored) ? stored : 'system';
   } catch {
-    return inMemoryThemeModes.get(storageKey) ?? "system";
+    return inMemoryThemeModes.get(storageKey) ?? 'system';
   }
 }
 
@@ -76,7 +79,7 @@ function writeStoredMode(storageKey: string, mode: ThemeMode): void {
 }
 
 function serverThemeMode(): ThemeMode {
-  return "system";
+  return 'system';
 }
 
 // Both `matchMedia` and the `MediaQueryList` event API are guarded: an engine
@@ -85,8 +88,8 @@ function serverThemeMode(): ThemeMode {
 function subscribeToSystemScheme(onStoreChange: () => void): () => void {
   try {
     const mediaQuery = window.matchMedia(DARK_SCHEME_QUERY);
-    mediaQuery.addEventListener("change", onStoreChange);
-    return () => mediaQuery.removeEventListener("change", onStoreChange);
+    mediaQuery.addEventListener('change', onStoreChange);
+    return () => mediaQuery.removeEventListener('change', onStoreChange);
   } catch {
     return () => {};
   }
@@ -118,11 +121,20 @@ function serverPrefersDark(): boolean {
  * Mount it exactly once (directly or via `ThemeProvider`) — multiple instances
  * would compete over the `<html>` class.
  */
-function useThemePreference(options: UseThemePreferenceOptions = {}): UseThemePreferenceResult {
+function useThemePreference(
+  options: UseThemePreferenceOptions = {},
+): UseThemePreferenceResult {
   const { storageKey = DEFAULT_THEME_STORAGE_KEY } = options;
 
-  const readThemeMode = useCallback(() => readStoredMode(storageKey), [storageKey]);
-  const themeMode = useSyncExternalStore(subscribeToThemeMode, readThemeMode, serverThemeMode);
+  const readThemeMode = useCallback(
+    () => readStoredMode(storageKey),
+    [storageKey],
+  );
+  const themeMode = useSyncExternalStore(
+    subscribeToThemeMode,
+    readThemeMode,
+    serverThemeMode,
+  );
   const systemPrefersDark = useSyncExternalStore(
     subscribeToSystemScheme,
     prefersDark,
@@ -136,10 +148,11 @@ function useThemePreference(options: UseThemePreferenceOptions = {}): UseThemePr
     [storageKey],
   );
 
-  const isDarkMode = themeMode === "system" ? systemPrefersDark : themeMode === "dark";
+  const isDarkMode =
+    themeMode === 'system' ? systemPrefersDark : themeMode === 'dark';
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", isDarkMode);
+    document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
   return { themeMode, isDarkMode, setThemeMode };
@@ -153,26 +166,28 @@ function useThemePreference(options: UseThemePreferenceOptions = {}): UseThemePr
  * Paste the returned string into a `<script>` at the top of `<head>` in
  * `index.html` (or inject it from an HTML template/SSR layer).
  */
-function themeBootstrapScript(storageKey: string = DEFAULT_THEME_STORAGE_KEY): string {
+function themeBootstrapScript(
+  storageKey: string = DEFAULT_THEME_STORAGE_KEY,
+): string {
   // Each browser API gets its own try so one failing (storage disabled,
   // matchMedia missing) doesn't stop the others — mirroring how the hook
   // guards them independently.
   return [
-    "(function () {",
-    "  var mode = null;",
-    "  var prefersDark = false;",
-    "  try {",
+    '(function () {',
+    '  var mode = null;',
+    '  var prefersDark = false;',
+    '  try {',
     `    mode = localStorage.getItem(${JSON.stringify(storageKey)});`,
-    "  } catch (e) {}",
-    "  try {",
+    '  } catch (e) {}',
+    '  try {',
     `    prefersDark = window.matchMedia('${DARK_SCHEME_QUERY}').matches;`,
-    "  } catch (e) {}",
+    '  } catch (e) {}',
     "  var isDark = mode === 'dark' || (mode !== 'light' && prefersDark);",
-    "  try {",
+    '  try {',
     "    document.documentElement.classList.toggle('dark', isDark);",
-    "  } catch (e) {}",
-    "})();",
-  ].join("\n");
+    '  } catch (e) {}',
+    '})();',
+  ].join('\n');
 }
 
 export type { ThemeMode, UseThemePreferenceOptions, UseThemePreferenceResult };

@@ -54,7 +54,7 @@ reverse-proxies `/api/*` to the dashboard.
 | **SBOM Detection** | Detects attached SPDX / CycloneDX attestations |
 | **Update Checking** | Compares running tags against latest semver tags (configurable level, pre-release filtering) |
 | **Helm Release Tracking** | Discovers all deployed Helm releases with chart versions |
-| **Web Dashboard** | Optional React + TypeScript SPA (served by nginx) with filters, sorting, pagination, and an image detail drawer |
+| **Web Dashboard** | Optional React + TypeScript SPA on the Nebari design system (served by nginx): supply-chain score, image inventory with per-image supply-chain detail, Helm releases, report history and downloads |
 | **Grafana Integration** | JSON API compatible with the Infinity datasource for dashboards and alerting |
 | **Provenance Reports** | Outputs timestamped JSON reports via the dashboard's internal upload endpoint (default), a shared PVC, or a ConfigMap, with automatic retention |
 

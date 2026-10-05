@@ -1,14 +1,14 @@
-import { Select as SelectPrimitive } from "@base-ui/react/select";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import type * as React from "react";
-import { cn } from "@/lib/utils";
+import { Select as SelectPrimitive } from '@base-ui/react/select';
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import type * as React from 'react';
+import { cn } from '@/lib/utils';
 
 type SelectTriggerProps = SelectPrimitive.Trigger.Props;
 
 type SelectContentProps = SelectPrimitive.Popup.Props &
   Pick<
     SelectPrimitive.Positioner.Props,
-    "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger"
+    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'alignItemWithTrigger'
   >;
 
 /**
@@ -25,7 +25,7 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
     <SelectPrimitive.Group
       data-slot="select-group"
-      className={cn("scroll-my-1", className)}
+      className={cn('scroll-my-1', className)}
       {...props}
     />
   );
@@ -36,7 +36,7 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   return (
     <SelectPrimitive.Value
       data-slot="select-value"
-      className={cn("flex flex-1 text-left", className)}
+      className={cn('flex flex-1 text-left', className)}
       {...props}
     />
   );
@@ -52,7 +52,9 @@ function SelectTrigger({ className, children, ...props }: SelectTriggerProps) {
     >
       {children}
       <SelectPrimitive.Icon
-        render={<ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />}
+        render={
+          <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
+        }
       />
     </SelectPrimitive.Trigger>
   );
@@ -65,9 +67,9 @@ function SelectTrigger({ className, children, ...props }: SelectTriggerProps) {
 function SelectContent({
   className,
   children,
-  side = "bottom",
+  side = 'bottom',
   sideOffset = 0,
-  align = "center",
+  align = 'center',
   alignOffset = 0,
   alignItemWithTrigger = false,
   ...props
@@ -86,13 +88,15 @@ function SelectContent({
           data-slot="select-content"
           data-align-trigger={alignItemWithTrigger}
           className={cn(
-            "relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground opacity-100 shadow-md ring-1 ring-foreground/10 data-[starting-style]:translate-y-1 data-[starting-style]:opacity-0 data-[ending-style]:translate-y-1 data-[ending-style]:opacity-0 motion-safe:transition-[opacity,transform] motion-safe:duration-(--duration-base) motion-safe:ease-(--ease-emphasized)",
+            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground opacity-100 shadow-md ring-1 ring-foreground/10 data-[starting-style]:translate-y-1 data-[starting-style]:opacity-0 data-[ending-style]:translate-y-1 data-[ending-style]:opacity-0 motion-safe:transition-[opacity,transform] motion-safe:duration-(--duration-base) motion-safe:ease-(--ease-emphasized)',
             className,
           )}
           {...props}
         >
           <SelectScrollUpButton />
-          <SelectPrimitive.List className="p-1">{children}</SelectPrimitive.List>
+          <SelectPrimitive.List className="p-1">
+            {children}
+          </SelectPrimitive.List>
           <SelectScrollDownButton />
         </SelectPrimitive.Popup>
       </SelectPrimitive.Positioner>
@@ -101,12 +105,15 @@ function SelectContent({
 }
 
 /** Label for a `SelectGroup`, rendered inside the popup list. */
-function SelectLabel({ className, ...props }: SelectPrimitive.GroupLabel.Props) {
+function SelectLabel({
+  className,
+  ...props
+}: SelectPrimitive.GroupLabel.Props) {
   return (
     <SelectPrimitive.GroupLabel
       data-slot="select-label"
       className={cn(
-        "px-1.5 py-1.5 font-medium text-muted-foreground text-xs uppercase tracking-[0.8px]",
+        'px-1.5 py-1.5 font-medium text-muted-foreground text-xs uppercase tracking-[0.8px]',
         className,
       )}
       {...props}
@@ -121,7 +128,11 @@ function SelectLabel({ className, ...props }: SelectPrimitive.GroupLabel.Props) 
  * reachable by keyboard, and cannot be selected — they never get the highlight
  * treatment from either pointer or keyboard.
  */
-function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Props) {
+function SelectItem({
+  className,
+  children,
+  ...props
+}: SelectPrimitive.Item.Props) {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
@@ -146,11 +157,14 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
 }
 
 /** Visual separator between option groups inside the popup list. */
-function SelectSeparator({ className, ...props }: SelectPrimitive.Separator.Props) {
+function SelectSeparator({
+  className,
+  ...props
+}: SelectPrimitive.Separator.Props) {
   return (
     <SelectPrimitive.Separator
       data-slot="select-separator"
-      className={cn("pointer-events-none -mx-1 my-1 h-px bg-border", className)}
+      className={cn('pointer-events-none -mx-1 my-1 h-px bg-border', className)}
       {...props}
     />
   );

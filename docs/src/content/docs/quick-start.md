@@ -31,7 +31,7 @@ nebariapp:
 webUI:
   enabled: true                       # dashboard API + report-upload endpoint; required when persistence.mode=http
   features:
-    timelineDeltas: false             # opt-in; show +N/-N badges between scans
+    timelineDeltas: false             # opt-in; show a +N/-N column on the Reports page
 
 frontend:
   enabled: true                       # standalone React UI (nginx); serves the SPA and proxies /api to the dashboard
@@ -114,7 +114,7 @@ kubectl get pods -n provenance-system -l app.kubernetes.io/name=provenance-colle
 
 Two options:
 
-1. **From the dashboard** — click the `Run Scan` button next to the timeline.
+1. **From the dashboard** — click **Run scan** on the Overview or Scans page.
    The button only renders for users whose OIDC groups intersect with
    `webUI.adminGroups`, so it's hidden by default until you wire up
    `webUI.oidcIssuer` and at least one admin group. Under operator-managed

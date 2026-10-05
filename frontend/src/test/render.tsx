@@ -1,27 +1,23 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type RenderOptions, render } from "@testing-library/react";
-import { Provider as JotaiProvider } from "jotai";
-import type { ReactElement, ReactNode } from "react";
+import { render } from '@testing-library/react';
+import { App } from '@/App';
+import { bearerStrategy, fakeKeycloak } from '@/auth/keycloak';
+import { setAuthStrategy } from '@/auth/strategy';
+import { setCapabilities } from '@/capabilities';
+import { MOCK_BEARER, MOCK_USER, provenanceHandlers } from '@/mocks/provenance-backend';
+import { server } from '@/mocks/server';
+import { createQueryClient } from '@/query-client';
 
-import { ThemeProvider } from "@/hooks/theme-provider";
-import { THEME_STORAGE_KEY } from "@/lib/theme";
+export function renderApp(path = '/') {
+  const client = createQueryClient();
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false, refetchInterval: false } });
+  return { ...render(<App client={client} initialPath={path} />), client };
+}
 
-/**
- * Render a component wrapped in the app's providers (fresh QueryClient + Jotai
- * store per call, plus ThemeProvider) so tests are isolated from one another.
- */
-export function renderWithProviders(ui: ReactElement, options?: Omit<RenderOptions, "wrapper">) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-  function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <JotaiProvider>
-          <ThemeProvider storageKey={THEME_STORAGE_KEY}>{children}</ThemeProvider>
-        </JotaiProvider>
-      </QueryClientProvider>
-    );
-  }
-
-  return render(ui, { wrapper: Wrapper, ...options });
+/** Provenance-only backend: the Go dashboard mock and a signed-in keycloak-js stand-in. */
+export function renderProvenanceApp(path = '/') {
+  server.use(...provenanceHandlers);
+  setCapabilities('provenance');
+  const keycloak = fakeKeycloak(MOCK_BEARER, MOCK_USER);
+  setAuthStrategy(bearerStrategy(keycloak));
+  return { ...renderApp(path), keycloak };
 }

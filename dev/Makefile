@@ -68,9 +68,10 @@ ui-up: build-load
 		-n $(NAMESPACE) --timeout=120s
 
 # Run the React dev server (Vite) against the in-cluster dashboard API. Opens a
-# port-forward to the dashboard (localhost:8080), which Vite proxies /api to,
-# and starts Vite at http://localhost:5173 with auth bypassed
-# (VITE_DEV_NO_AUTH=true) to match the dashboard's disabled-auth dev posture.
+# port-forward to the dashboard (localhost:8080), which Vite proxies /api to
+# (API_PROXY), and starts Vite at http://localhost:5173. The dev server's
+# public/config.json has no keycloak block, so the SPA sends no bearer, which
+# matches the dashboard's disabled-auth dev posture.
 ui-dev:
 	@echo "Vite dev server -> http://localhost:5173  (proxying /api to the dashboard)"
 	@kubectl port-forward -n $(NAMESPACE) \
@@ -80,7 +81,7 @@ ui-dev:
 	for i in 1 2 3 4 5; do \
 		curl -sf http://localhost:8080/healthz >/dev/null 2>&1 && break; sleep 1; \
 	done; \
-	cd ../frontend && VITE_DEV_NO_AUTH=true WEBAPI_URL=http://localhost:8080 npm run dev
+	cd ../frontend && API_PROXY=http://localhost:8080 npm run dev
 
 # Seed the dashboard with three timestamped sample reports. Opens a temporary
 # port-forward to the internal upload Service, uploads, then tears it down.

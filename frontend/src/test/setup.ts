@@ -1,42 +1,20 @@
-import "@testing-library/jest-dom/vitest";
+import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
+import { afterAll, afterEach, beforeAll } from 'vitest';
+import { resetAuthState } from '@/api/auth-state';
+import { resetProvenanceState } from '@/api/provenance-adapter';
+import { setScanJob } from '@/api/provenance-queries';
+import { resetAuthStrategy } from '@/auth/strategy';
+import { resetCapabilities } from '@/capabilities';
+import { setConfig } from '@/config';
+import { resetMockState } from '@/mocks/handlers';
+import { resetProvenanceMock } from '@/mocks/provenance-backend';
+import { server } from '@/mocks/server';
 
-import { initKeycloak } from "@/auth/keycloak";
-
-// jsdom under this vitest version does not expose a functional Web Storage on
-// the default origin, and never implements matchMedia. Provide deterministic
-// in-memory stand-ins so hooks that read theme preference work under test.
-
-class MemoryStorage implements Storage {
-  private store = new Map<string, string>();
-  get length() {
-    return this.store.size;
-  }
-  clear() {
-    this.store.clear();
-  }
-  getItem(key: string) {
-    return this.store.has(key) ? (this.store.get(key) as string) : null;
-  }
-  key(index: number) {
-    return Array.from(this.store.keys())[index] ?? null;
-  }
-  removeItem(key: string) {
-    this.store.delete(key);
-  }
-  setItem(key: string, value: string) {
-    this.store.set(key, String(value));
-  }
-}
-
-Object.defineProperty(globalThis, "localStorage", {
-  configurable: true,
-  value: new MemoryStorage(),
-});
-
-if (typeof window.matchMedia !== "function") {
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    value: (query: string) => ({
+// jsdom gaps used by Base UI / recharts / the theme hook
+if (!window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
       matches: false,
       media: query,
       onchange: null,
@@ -45,16 +23,28 @@ if (typeof window.matchMedia !== "function") {
       addListener: () => {},
       removeListener: () => {},
       dispatchEvent: () => false,
-    }),
-  });
+    }) as unknown as MediaQueryList;
+}
+if (!('ResizeObserver' in window)) {
+  (window as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
 }
 
-// Inject a fake authenticated Keycloak session so api.ts can attach a bearer
-// token without redirecting to a real Keycloak. initKeycloak() honors this shim
-// outside production builds.
-window.__PW_E2E_AUTH__ = {
-  authenticated: true,
-  token: "test-token",
-  idTokenParsed: { name: "Test User", email: "test@example.com", preferred_username: "test" },
-};
-await initKeycloak();
+setConfig({ apiBase: 'http://localhost/api/v1', provenanceApiBase: 'http://localhost/api' });
+
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+afterEach(() => {
+  cleanup();
+  server.resetHandlers();
+  resetMockState();
+  resetAuthState();
+  resetCapabilities();
+  resetAuthStrategy();
+  resetProvenanceState();
+  resetProvenanceMock();
+  setScanJob(null);
+});
+afterAll(() => server.close());

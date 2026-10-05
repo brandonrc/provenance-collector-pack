@@ -1,71 +1,64 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import '@fontsource-variable/geist';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
+import './index.css';
 
-import { applyAppConfig, loadAppConfig } from "@/app/config";
-import { initKeycloak } from "@/auth/keycloak";
-import { ThemeProvider } from "@/hooks/theme-provider";
-import { queryClient } from "@/lib/queryClient";
-import { THEME_STORAGE_KEY } from "@/lib/theme";
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { App } from '@/App';
+import type { AuthStrategy } from '@/auth/strategy';
+import { initBackend } from '@/bootstrap';
+import { applyBranding } from '@/branding';
+import { productTitle } from '@/capabilities';
+import { loadConfig } from '@/config';
+import { createQueryClient } from '@/query-client';
 
-import App from "./App.tsx";
-
-import "./index.css";
-
-const rootElement = document.getElementById("root");
-if (!rootElement) {
-  throw new Error("Root element not found");
-}
-
-// Renders a plain, dependency-free message so a bootstrap failure (typically a
-// malformed or unreachable /config.json) shows something actionable instead of
-// a blank white page.
+/** Plain, dependency-free message so a failed login bootstrap isn't a blank page. */
 function renderBootstrapError(container: HTMLElement, message: string) {
-  container.textContent = "";
-  const wrapper = document.createElement("div");
-  wrapper.setAttribute("role", "alert");
-  wrapper.style.cssText =
-    "max-width:40rem;margin:4rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif;line-height:1.5";
-  const heading = document.createElement("h1");
-  heading.textContent = "Unable to start";
-  const detail = document.createElement("p");
+  container.textContent = '';
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('role', 'alert');
+  wrapper.style.cssText = 'max-width:40rem;margin:4rem auto;padding:0 1.5rem;font-family:system-ui,sans-serif;line-height:1.5';
+  const heading = document.createElement('h1');
+  heading.textContent = 'Unable to start';
+  const detail = document.createElement('p');
   detail.textContent = message;
   wrapper.append(heading, detail);
   container.append(wrapper);
 }
 
-// Authenticate before rendering. initKeycloak() loads /config.json and runs the
-// Keycloak login-required flow, only resolving once the user is signed in (or
-// immediately, via the dev/E2E bypass).
-try {
-  await initKeycloak();
-} catch (err) {
-  renderBootstrapError(
-    rootElement,
-    "The app could not load its runtime configuration or reach the login service. Check that /config.json is valid and Keycloak is reachable, then reload.",
+async function bootstrap() {
+  const root = document.getElementById('root') as HTMLElement;
+  const config = await loadConfig();
+  applyBranding(config.branding);
+  const mock = import.meta.env.VITE_API_MOCK;
+  let mockStrategy: AuthStrategy | undefined;
+  if (mock === 'provenance') {
+    const { worker, mockAuthStrategy } = await import('@/mocks/provenance-browser');
+    await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
+    mockStrategy = mockAuthStrategy();
+    console.info('[security-posture] provenance-only API mock mode (MSW) enabled');
+  } else if (mock) {
+    const { worker } = await import('@/mocks/browser');
+    await worker.start({ onUnhandledRequest: 'bypass', quiet: true });
+    console.info('[security-posture] API mock mode (MSW) enabled');
+  }
+  let ready: boolean;
+  let capabilities;
+  try {
+    ({ ready, capabilities } = await initBackend({ mockStrategy }));
+  } catch (err) {
+    renderBootstrapError(root, 'The app could not reach the login service. Check the keycloak block in /config.json and that Keycloak is reachable, then reload.');
+    throw err;
+  }
+  if (!ready) return; // keycloak-js is redirecting to the login page
+  document.title = `${productTitle(capabilities)} · Nebari`;
+  const client = createQueryClient();
+  createRoot(root).render(
+    <StrictMode>
+      <App client={client} />
+    </StrictMode>,
   );
-  throw err;
 }
 
-// Apply branding from /config.json (frontend.branding.* in the chart) before
-// the first paint: page title, favicon, and theme token overrides. Loaded here
-// (not only via initKeycloak) so branding still applies under the dev/E2E auth
-// bypass, which returns before loading config. Tolerant of a missing config so
-// a branding-less setup still boots; loadAppConfig() caches, so this is a no-op
-// fetch when initKeycloak already ran it. No-op when no branding is configured,
-// so existing deployments look unchanged.
-try {
-  applyAppConfig(await loadAppConfig());
-} catch {
-  // Branding is best-effort; fall back to the built-in defaults.
-}
-
-createRoot(rootElement).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider storageKey={THEME_STORAGE_KEY}>
-        <App />
-      </ThemeProvider>
-    </QueryClientProvider>
-  </StrictMode>,
-);
+void bootstrap();

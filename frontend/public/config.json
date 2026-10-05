@@ -1,12 +1,3 @@
 {
-  "keycloak": {
-    "url": "http://localhost:8180",
-    "realm": "nebari",
-    "clientId": "nebari-frontend-spa"
-  },
-  "title": "",
-  "logoUrl": "",
-  "logoUrlDark": "",
-  "faviconUrl": "",
-  "theme": { "light": {}, "dark": {} }
+  "apiBase": "/api/v1"
 }

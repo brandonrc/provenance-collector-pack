@@ -1,1 +1,0 @@
-export { HelmTable } from "./HelmTable";

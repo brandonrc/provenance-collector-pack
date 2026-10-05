@@ -8,8 +8,9 @@ updates:
       time: "08:00"
       timezone: "US/Eastern"
     groups:
-      # vite, its plugins, and vitest are locked together by peer ranges:
-      # @vitejs/plugin-react 6 needs vite ^8, so a lone plugin bump can't
+      # vite, its plugins, and vitest are locked together by peer ranges
+      # (@vitejs/plugin-react and @tailwindcss/vite pin a vite major, and
+      # @vitest/coverage-v8 must match vitest exactly), so a lone bump can't
       # install. Group them with majors included so the toolchain moves as one.
       vite-toolchain:
         applies-to: version-updates
@@ -18,6 +19,7 @@ updates:
           - "@vitejs/*"
           - "vitest"
           - "@vitest/*"
+          - "@tailwindcss/vite"
       # Group all remaining patch and minor updates into a single PR
       patch-and-minor:
         applies-to: version-updates
@@ -33,6 +35,14 @@ updates:
       # which tsconfig.app.json relies on. Upgrade deliberately, not via a bot.
       - dependency-name: "typescript"
         versions: [">=7"]
+      # The vendored Nebari design-system components (src/components/ui) are
+      # tested against @base-ui/react 1.6; 1.8 changes the toast types. Move it
+      # together with a registry update, not on its own.
+      - dependency-name: "@base-ui/react"
+        versions: [">=1.7"]
+      # Pinned to the mcr.microsoft.com/playwright image tag the frontend-e2e
+      # job runs in (.github/workflows/test.yaml); bump both together.
+      - dependency-name: "@playwright/test"
 
   - package-ecosystem: "npm"
     directory: "/docs"

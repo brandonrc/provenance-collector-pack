@@ -8,12 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Web dashboard: `frontend/` is replaced by the Nebari design-system UI shared
+  with the Nebari Security Posture pack, running in provenance-only mode.
+  - New pages: Overview with an A–F supply-chain score, an Images inventory
+    with a per-image detail page (Used by, Supply chain with score
+    deductions), a Supply chain page with the Helm releases table and
+    unsigned / outdated lists, Reports (history, View to load an earlier
+    report, JSON / CSV / Markdown downloads per report) and Scans (Run scan,
+    followed until the new report lands).
+  - Login is unchanged: keycloak-js with PKCE S256 from
+    `frontend.keycloak.{url,realm,clientId}`. `frontend.title` and
+    `frontend.branding.*` keep working.
+  - The image is now based on `nginx-unprivileged` (uid 101, port 8080) and
+    renders its own nginx config from `NGINX_PORT` / `API_UPSTREAM`; the chart
+    no longer mounts an `nginx.conf` and drops the `/var/run` emptyDir.
+    `config.json` gains `"mode": "provenance"`.
+  - Frontend CI: ESLint + `tsc` replace Biome; Vitest runs with a coverage
+    gate; a new Playwright job runs against the mock bundles; the
+    integration e2e specs (`test/e2e`) and the auto-captured screenshots
+    (`docs/screenshots/dashboard-*-{light,dark}.png`) follow the new UI.
+
 - Integration test migrated to `action-nebari-sandbox` v3, which provisions the
   sandbox through NIC's `local` (kind) provider instead of k3d + NIC's
   `existing` provider. The `profile` input is gone, the image is loaded with
   `kind load docker-image`, and the explicit `k3d cluster delete` cleanup step
   was dropped — v3 tears the deployment down in its own post step. `nic-version`
   is now pinned to `v0.13.0` rather than tracking `latest`.
+
+### Removed
+- The frontend image's `BRANDING_*` / `KEYCLOAK_*` environment overrides
+  (`docker-entrypoint.sh`). Outside Kubernetes, mount a `config.json` over
+  `/usr/share/nginx/html/config.json` instead.
+- The saved theme preference moves from the `provenance:themeMode` to the
+  `nebari:themeMode` localStorage key, so users see the System default once.
 
 ### Fixed
 - Integration test no longer races ArgoCD's first sync. `add-software-pack`'s

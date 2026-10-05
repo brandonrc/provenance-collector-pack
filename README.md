@@ -38,7 +38,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/dashboard-overview.png" alt="Provenance Collector dashboard — image inventory with signature, SLSA, SBOM, and update status" width="820">
+  <img src="docs/screenshots/dashboard-overview-light.png" alt="Provenance Collector dashboard — supply-chain score, signature, SBOM, SLSA provenance and update tiles for the latest report" width="820">
 </p>
 
 > **Status**: Under active development as part of Nebari Infrastructure Core (NIC). APIs, chart values, and report
@@ -69,7 +69,7 @@ should not require manual auditing.
 | **SBOM Detection** | Detects attached SPDX / CycloneDX attestations |
 | **Update Checking** | Compares running tags against latest semver tags (configurable level, pre-release filtering) |
 | **Helm Release Tracking** | Discovers all deployed Helm releases with chart versions |
-| **Web Dashboard** | Optional React + TypeScript SPA (served by nginx) with filters, sorting, pagination, and an image detail drawer |
+| **Web Dashboard** | Optional React + TypeScript SPA on the Nebari design system (served by nginx): supply-chain score, image inventory with per-image supply-chain detail, Helm releases, report history and downloads |
 | **Grafana Integration** | JSON API compatible with the Infinity datasource for dashboards and alerting |
 | **Provenance Reports** | Outputs timestamped JSON reports via the dashboard's internal upload endpoint (default), a shared PVC, or a ConfigMap, with automatic retention |
 
@@ -100,7 +100,7 @@ nebariapp:
 webUI:
   enabled: true                       # dashboard API + report-upload endpoint; required when persistence.mode=http
   features:
-    timelineDeltas: false             # opt-in; show +N/-N badges between scans
+    timelineDeltas: false             # opt-in; show a +N/-N column on the Reports page
 
 frontend:
   enabled: true                       # standalone React UI (nginx); serves the SPA and proxies /api to the dashboard
@@ -176,7 +176,7 @@ kubectl get pods -n provenance-system -l app.kubernetes.io/name=provenance-colle
 
 Two options:
 
-1. **From the dashboard** — click the `Run Scan` button next to the timeline.
+1. **From the dashboard** — click **Run scan** on the Overview or Scans page.
    The button only renders for users whose OIDC groups intersect with
    `webUI.adminGroups`, so it's hidden by default until you wire up
    `webUI.oidcIssuer` and at least one admin group. Under operator-managed
@@ -244,9 +244,10 @@ ServiceAccount if your cluster supports it.
 
 ## Web Dashboard
 
-The UI is a standalone **React + TypeScript SPA** (Vite + Tailwind + the Nebari design system), built into its
-own nginx image and deployed as a separate `Deployment`/`Service`. The Go dashboard is **API-only**: nginx serves
-the SPA and reverse-proxies `/api/*` to the dashboard over cluster DNS. Enable both:
+The UI is a standalone **React + TypeScript SPA** built on the [Nebari design system](https://github.com/nebari-dev/nebari-design)
+(Vite + Tailwind), shipped as its own unprivileged nginx image (uid 101, port 8080, read-only root filesystem) and
+deployed as a separate `Deployment`/`Service`. The Go dashboard is **API-only**: nginx serves the SPA and
+reverse-proxies `/api/*` to the dashboard over cluster DNS. Enable both:
 
 ```yaml
 webUI:
@@ -257,36 +258,66 @@ frontend:
     url: https://keycloak.<your-domain>   # required: the browser keycloak-js login endpoint
 ```
 
-The dashboard provides:
+The dashboard has five sections:
 
-- Summary stat cards (`N / M` ratios for Signed, Verified, SLSA, SBOM; absolute counts for Images, Updates, Helm)
-- Report timeline to browse historical reports, with an opt-in `+N / -N` unique-image delta badge between adjacent scans (`webUI.features.timelineDeltas`)
-- Filterable, sortable, paginated image table (truncated workload column with full name on hover)
-- Click any image row for a detail drawer showing signature, SLSA, SBOM, and update info
-- Helm releases table
-- Light / Dark / System theme, chosen from the profile menu (defaults to System)
-- **Run Scan** button — admin-gated; triggers a one-shot Job from the same CronJob template the schedule uses. Hidden unless `webUI.oidcIssuer` is set and the calling user's OIDC groups intersect with `webUI.adminGroups`. Auto-cleanup after `webUI.manualJobTTL` (default 1h).
-- **Export** button (`CSV` / `Markdown` / `JSON`) — downloads whichever report is currently selected on the timeline, not just the latest
+- **Overview**: supply-chain score (A–F, container-weighted mean of the per-image scores), Signed / Verified /
+  SBOM / SLSA provenance / update tiles, report metadata (cluster, collector version, schema version, namespaces
+  scanned), the collector's warnings, and the last few reports.
+- **Images**: one row per unique image with its supply-chain grade, signature, SBOM, provenance and update
+  status, namespaces and workloads; search, filters, sorting and paging. Each image opens a detail page with
+  **Used by** (every namespace / workload / container) and **Supply chain** (signature, SBOM format, SLSA
+  predicate, available updates, and the score deductions).
+- **Supply chain**: the same tiles plus the **Helm releases** table (installed vs latest chart version, status),
+  and lists of unsigned / unverified and outdated images.
+- **Reports**: every collector run, newest first. **View** loads an earlier report into Overview, Images and
+  Supply chain (a banner offers *Back to latest*); each row downloads as JSON, CSV or Markdown. With
+  `webUI.features.timelineDeltas` a Δ column shows the unique-image change between adjacent runs.
+- **Scans**: **Run scan** (admin-gated) triggers a one-shot Job from the same CronJob template the schedule
+  uses. It is hidden unless `webUI.oidcIssuer` is set and the calling user's OIDC groups intersect with
+  `webUI.adminGroups`. The UI follows the job by polling for a newer report and loads it when it lands.
+  Manual Jobs are cleaned up after `webUI.manualJobTTL` (default 1h).
 
-**Authentication.** The SPA runs the OIDC login in the browser via `keycloak-js` (PKCE), attaching the access
-token to every `/api` call; nginx forwards it to the dashboard, which validates it against Keycloak. Under
-`nebariapp.enabled: true` the operator provisions the public SPA client and registers routing/landing-page —
-the gateway itself does **not** enforce auth (`nebariapp.auth.enforceAtGateway: false`). The operator also wires
-`webUI.oidcIssuer` / `webUI.adminGroups` from the `nebariapp.auth` block so Run Scan lights up for users in the
-configured groups.
+Light / Dark / System theme is chosen from the profile menu (defaults to System).
 
-**Running the UI locally.** Port-forward the dashboard API and point the Vite dev server at it (auth bypassed for
-local dev):
+<table>
+  <tr>
+    <td><img src="docs/screenshots/dashboard-images-light.png" alt="Images: one row per unique image with supply-chain grade, signature, SBOM, provenance and update status" width="400"></td>
+    <td><img src="docs/screenshots/dashboard-image-detail-dark.png" alt="Image detail, Supply chain tab: signature, SBOM, SLSA provenance, updates and score deductions (dark theme)" width="400"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/dashboard-supply-chain-light.png" alt="Supply chain: tiles, Helm releases, unsigned and outdated images" width="400"></td>
+    <td><img src="docs/screenshots/dashboard-reports-dark.png" alt="Reports: report history with View and JSON / CSV / Markdown downloads (dark theme)" width="400"></td>
+  </tr>
+</table>
+
+Screenshots are generated from the golden test report by `frontend/screenshots/run.sh` (Docker only) and refreshed
+from the integration sandbox on every push to `main`.
+
+**Authentication.** The SPA runs the OIDC login in the browser via `keycloak-js` (PKCE `S256`, `login-required`),
+attaching the access token to every `/api` call and refreshing it shortly before it expires; nginx forwards it to
+the dashboard, which validates it against Keycloak. Under `nebariapp.enabled: true` the operator provisions the
+public SPA client and registers routing/landing-page — the gateway itself does **not** enforce auth
+(`nebariapp.auth.enforceAtGateway: false`). The operator also wires `webUI.oidcIssuer` / `webUI.adminGroups` from
+the `nebariapp.auth` block so Run scan lights up for users in the configured groups.
+
+**Branding.** `frontend.title` and `frontend.branding.{logoUrl,logoUrlDark,faviconUrl,theme}` are rendered into the
+SPA's `/config.json` and applied at startup; see the [web dashboard docs](https://packs.nebari.dev/provenance-collector-pack/web-dashboard/).
+
+**Running the UI locally.** Port-forward the dashboard API and point the Vite dev server at it. The dev server's
+`config.json` has no `keycloak` block, so no login happens (matching a dashboard with auth off):
 
 ```bash
 kubectl port-forward svc/provenance-collector-web 8080:8080 -n provenance-system &
 cd frontend
 npm ci
-VITE_DEV_NO_AUTH=true WEBAPI_URL=http://localhost:8080 npm run dev   # → http://localhost:5173
+API_PROXY=http://localhost:8080 npm run dev   # → http://localhost:5173
 ```
 
-The `dev/Makefile` wraps this as `make ui-up` (install the chart, API only) + `make seed` (sample reports) +
-`make ui-dev` (port-forward + Vite). See [Development](#development).
+No cluster at all? `npm run dev:mock-provenance` serves the UI against an in-browser mock of the dashboard API
+(the golden report plus two older runs).
+
+The `dev/Makefile` wraps the cluster loop as `make ui-up` (install the chart, API only) + `make seed` (sample
+reports) + `make ui-dev` (port-forward + Vite). See [Development](#development).
 
 ### Dashboard API
 
@@ -446,7 +477,7 @@ webUI:
   adminGroups: []             # OIDC group(s) allowed to click Run Scan
   manualJobTTL: "1h"          # Auto-clean dashboard-triggered Jobs; "0" to keep
   features:
-    timelineDeltas: false     # Opt-in; show +N/-N badges between scans
+    timelineDeltas: false     # Opt-in; show a +N/-N column on the Reports page
 
 frontend:
   enabled: true               # Standalone React UI (nginx); requires webUI.enabled
@@ -518,10 +549,13 @@ Frontend (React SPA in `frontend/`):
 ```bash
 cd frontend
 npm ci
-npm run dev      # Vite dev server (proxies /api to $WEBAPI_URL, default http://localhost:8080)
-npm run build    # tsc + vite build → dist/ (baked into the frontend nginx image)
-npm run check    # Biome lint + format
-npm test         # Vitest
+API_PROXY=http://localhost:8080 npm run dev   # Vite dev server, proxies /api to the dashboard
+npm run dev:mock-provenance   # no backend: in-browser mock of the dashboard API (golden report)
+npm run build                 # tsc + vite build → dist/ (baked into the frontend nginx image)
+npm run lint                  # ESLint
+npm run typecheck             # tsc --noEmit
+npm run test:coverage         # Vitest with the coverage gate (thresholds in vitest.config.ts)
+npm run build:mock-preview && npm run e2e   # Playwright against the mock bundles
 ```
 
 For a full local loop against a real dashboard, see the [Web Dashboard](#web-dashboard) section
@@ -573,8 +607,8 @@ internal/
     generator.go              Orchestrator with concurrent enrichment
     writer.go                 HTTP, PVC, and ConfigMap output writers
 frontend/                     React + TypeScript SPA (Vite, Tailwind, Nebari design system)
-    src/                      Components, hooks, Jotai store, API layer
-    Dockerfile                node build → nginx serve; nginx.default.conf
+    src/                      Pages, components, API layer + report adapter, keycloak-js auth
+    Dockerfile                node build → nginx-unprivileged serve; nginx.conf + docker/ templates
 chart/                        Helm chart (CronJob + RBAC + Dashboard API + Frontend + NebariApp)
 examples/                     Deployment examples (standalone, Nebari, ArgoCD)
 docs/                         Configuration, report schema, NebariApp CRD reference
